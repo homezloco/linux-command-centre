@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "$lib/*": ["src/renderer/src/lib/*"],
+      "$stores/*": ["src/renderer/src/stores/*"],
+      "$modules/*": ["src/renderer/src/modules/*"]
+    }
+  },
+  "include": ["src/renderer/src/**/*"]
+}

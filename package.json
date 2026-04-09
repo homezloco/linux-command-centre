@@ -1,0 +1,48 @@
+{
+  "name": "linux-command-centre",
+  "version": "0.1.0",
+  "description": "Linux hardware management dashboard",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "npm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.0.0",
+    "postcss": "^8.4.49",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "tailwindcss": "^3.4.14",
+    "tslib": "^2.8.1",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@tanstack/svelte-query": "^5.59.16",
+    "bits-ui": "^1.0.0",
+    "clsx": "^2.1.1",
+    "lucide-svelte": "^0.460.0",
+    "tailwind-merge": "^2.5.4",
+    "uplot": "^1.6.31",
+    "ws": "^8.18.0"
+  },
+  "build": {
+    "appId": "io.lcc.app",
+    "productName": "Linux Command Centre",
+    "linux": {
+      "target": ["deb", "AppImage"],
+      "category": "System"
+    },
+    "files": ["out/**/*"],
+    "extraResources": [
+      { "from": "helper/lcc-helper.js", "to": "lcc-helper.js" }
+    ]
+  }
+}
