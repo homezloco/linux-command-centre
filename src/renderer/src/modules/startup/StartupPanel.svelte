@@ -34,6 +34,28 @@
   let addComment = $state('')
   let addSaving = $state(false)
 
+  // ── App Autostart (self) ───────────────────────────────────────────────────
+  let appAutostart = $state<{ enabled: boolean } | null>(null)
+  let appAutostartLoading = $state(true)
+  let appAutostartToggling = $state(false)
+
+  async function loadAppAutostart() {
+    appAutostartLoading = true
+    try { appAutostart = await invoke<{ enabled: boolean }>('app:autostartStatus') }
+    catch (e) { appsError = String(e) }
+    finally { appAutostartLoading = false }
+  }
+
+  async function toggleAppAutostart() {
+    if (!appAutostart) return
+    appAutostartToggling = true
+    try {
+      await invoke('app:autostartSet', !appAutostart.enabled)
+      await loadAppAutostart()
+    } catch (e) { appsError = String(e) }
+    finally { appAutostartToggling = false }
+  }
+
   async function loadApps() {
     appsLoading = true; appsError = ''
     try { apps = await invoke<StartupApp[]>('startup:list') }
@@ -144,7 +166,7 @@
     if (tab === 'services' && !servicesLoaded) { servicesLoaded = true; loadServices() }
   })
 
-  onMount(loadApps)
+  onMount(() => { loadApps(); loadAppAutostart() })
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function subColor(sub: string) {
@@ -184,7 +206,35 @@
 <!-- ══ STARTUP APPS ══════════════════════════════════════════════════════════ -->
 {#if tab === 'apps'}
   <div class="max-w-xl space-y-3">
-    <div class="flex items-center justify-between">
+    <!-- Self autostart card -->
+    <div class="rounded-xl border border-border bg-card p-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-primary/10 text-primary">
+            <Power size={16} />
+          </div>
+          <div>
+            <p class="text-sm font-medium">Start on login</p>
+            <p class="text-xs text-muted-foreground">Launch Command Centre when you log in</p>
+          </div>
+        </div>
+        {#if appAutostartLoading}
+          <div class="w-10 h-5 rounded-full bg-secondary animate-pulse"></div>
+        {:else if appAutostart}
+          <button
+            onclick={toggleAppAutostart}
+            disabled={appAutostartToggling}
+            class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
+                   {appAutostart.enabled ? 'bg-primary' : 'bg-secondary border border-border'}"
+          >
+            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform
+                         {appAutostart.enabled ? 'translate-x-5' : ''}"></span>
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between pt-2">
       <p class="text-xs text-muted-foreground">Apps that launch automatically at login</p>
       <button
         onclick={() => { showAddForm = !showAddForm; appsError = '' }}

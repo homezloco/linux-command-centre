@@ -197,9 +197,26 @@ export async function registerIpcHandlers(): Promise<void> {
     return privilegedOp('bluetooth-toggle')
   })
 
+  async function getDeviceInfo(mac: string): Promise<{ name: string; type: string; rssi: number | null }> {
+    try {
+      const info = await run(`bluetoothctl info ${mac}`)
+      const nameMatch = info.match(/Name:\s*(.+)/)
+      const aliasMatch = info.match(/Alias:\s*(.+)/)
+      const iconMatch = info.match(/Icon:\s*(.+)/)
+      const rssiMatch = info.match(/RSSI:\s*([-\d]+)/)
+
+      const name = nameMatch?.[1]?.trim() || aliasMatch?.[1]?.trim() || ''
+      const type = iconMatch?.[1]?.trim() || 'bluetooth'
+      const rssi = rssiMatch ? parseInt(rssiMatch[1], 10) : null
+
+      return { name, type, rssi }
+    } catch {
+      return { name: '', type: 'bluetooth', rssi: null }
+    }
+  }
+
   ipcMain.handle('bluetooth:scan', async () => {
     try {
-      // Start discovery in background
       const scanProc = exec('bluetoothctl scan on 2>/dev/null')
       await new Promise(r => setTimeout(r, 6000))
       scanProc.kill()
@@ -214,8 +231,28 @@ export async function registerIpcHandlers(): Promise<void> {
 
       const all = parseDevices(allOut)
       const pairedMacs = new Set(parseDevices(pairedOut).map(d => d.mac))
+      const unpaired = all.filter(d => !pairedMacs.has(d.mac))
 
-      return all.filter(d => !pairedMacs.has(d.mac))
+      // Enrich with detailed info
+      const enriched = await Promise.all(
+        unpaired.map(async (d) => {
+          const info = await getDeviceInfo(d.mac)
+          return {
+            mac: d.mac,
+            name: info.name || d.name || '',
+            type: info.type,
+            rssi: info.rssi
+          }
+        })
+      )
+
+      // Sort by signal strength (stronger first)
+      return enriched.sort((a, b) => {
+        if (a.rssi == null && b.rssi == null) return 0
+        if (a.rssi == null) return 1
+        if (b.rssi == null) return -1
+        return b.rssi - a.rssi
+      })
     } catch {
       return []
     }
@@ -540,6 +577,48 @@ export async function registerIpcHandlers(): Promise<void> {
     const home = homedir()
     const filePath = `${home}/.config/autostart/${id}.desktop`
     await unlink(filePath)
+    return { ok: true }
+  })
+
+  // ── App Autostart (self) ─────────────────────────────────────────────────
+  const APP_ID = 'linux-command-centre'
+
+  ipcMain.handle('app:autostartStatus', async () => {
+    const home = homedir()
+    const filePath = `${home}/.config/autostart/${APP_ID}.desktop`
+    try {
+      const content = await readFile(filePath, 'utf8')
+      const hidden = /^Hidden=true$/m.test(content)
+      const gnomeEnabled = content.match(/^X-GNOME-Autostart-enabled=(.*)$/m)?.[1]?.trim()
+      return { enabled: !hidden && gnomeEnabled !== 'false' }
+    } catch {
+      return { enabled: false }
+    }
+  })
+
+  ipcMain.handle('app:autostartSet', async (_, enabled: boolean) => {
+    const home = homedir()
+    const userDir = `${home}/.config/autostart`
+    await mkdir(userDir, { recursive: true })
+    const filePath = `${userDir}/${APP_ID}.desktop`
+
+    // Try to detect how the app was launched
+    const execPath = process.env.APPIMAGE || process.execPath
+    const isAppImage = !!process.env.APPIMAGE
+
+    const content = [
+      '[Desktop Entry]',
+      'Type=Application',
+      'Name=Linux Command Centre',
+      'Comment=Hardware management dashboard',
+      `Exec=${execPath}${isAppImage ? ' --no-sandbox' : ''}`,
+      enabled ? 'X-GNOME-Autostart-enabled=true' : 'X-GNOME-Autostart-enabled=false',
+      enabled ? '' : 'Hidden=true',
+      'Icon=utilities-terminal',
+      'Categories=System;Settings;',
+    ].filter(Boolean).join('\n') + '\n'
+
+    await writeFile(filePath, content, 'utf8')
     return { ok: true }
   })
 

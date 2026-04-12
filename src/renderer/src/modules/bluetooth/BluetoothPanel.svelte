@@ -5,7 +5,7 @@
 
   type Device    = { mac: string; name: string; connected: boolean; type: string }
   type BtStatus  = { blocked: boolean; devices: Device[] }
-  type Nearby    = { mac: string; name: string }
+  type Nearby    = { mac: string; name: string; type: string; rssi: number | null }
 
   let status    = $state<BtStatus | null>(null)
   let loading   = $state(true)
@@ -247,14 +247,25 @@
         {:else if nearby.length > 0}
           <div class="divide-y divide-border">
             {#each nearby as device}
+              {@const Icon = deviceIcon(device.type)}
               {@const isActing = actingOn.has(device.mac)}
               {@const err = deviceError[device.mac]}
+              {@const signal = device.rssi != null ? Math.min(Math.max(Math.round((device.rssi + 90) / 60 * 4), 0), 4) : null}
               <div class="flex flex-col">
                 <div class="flex items-center gap-3 px-4 py-3">
-                  <Bluetooth size={15} class="text-muted-foreground shrink-0" />
+                  <Icon size={15} class="text-muted-foreground shrink-0" />
                   <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium truncate">{device.name || 'Unknown device'}</p>
-                    <p class="text-xs text-muted-foreground font-mono">{device.mac}</p>
+                    <p class="text-sm font-medium truncate">{device.name || `Unknown ${device.type}`}</p>
+                    <div class="flex items-center gap-2">
+                      <p class="text-xs text-muted-foreground font-mono">{device.mac}</p>
+                      {#if signal != null}
+                        <div class="flex items-end gap-px h-3">
+                          {#each [1, 2, 3, 4] as bar}
+                            <div class="w-1 rounded-sm {bar <= signal ? 'bg-primary' : 'bg-muted'}" style="height: {bar * 3}px"></div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
                   </div>
                   <button
                     onclick={() => pair(device.mac)}
