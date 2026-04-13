@@ -6,7 +6,7 @@
   type SystemStatus = {
     hostname: string; osName: string; kernel: string; arch: string
     uptime: { days: number; hours: number; minutes: number; totalSeconds: number }
-    cpu: { model: string; cores: number; usage: number }
+    cpu: { model: string; cores: number; usage: number; coreUsages: number[] }
     memory: { total: number; used: number; available: number; swapTotal: number; swapUsed: number }
     load: { one: number; five: number; fifteen: number }
     processes: number
@@ -196,6 +196,27 @@
         <span>5m: <span class="text-foreground font-medium">{status.load.five.toFixed(2)}</span></span>
         <span>15m: <span class="text-foreground font-medium">{status.load.fifteen.toFixed(2)}</span></span>
       </div>
+
+      <!-- Per-core grid -->
+      {#if status.cpu.coreUsages && status.cpu.coreUsages.length > 0}
+        <div class="border-t border-border pt-3">
+          <p class="text-xs text-muted-foreground mb-2">Per-core usage</p>
+          <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fill, minmax(60px, 1fr))">
+            {#each status.cpu.coreUsages as pct, i}
+              <div class="rounded-md bg-secondary/50 p-1.5 space-y-1">
+                <div class="flex items-center justify-between">
+                  <span class="text-[9px] text-muted-foreground/70">C{i}</span>
+                  <span class="text-[10px] font-medium tabular-nums {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-yellow-400' : 'text-foreground'}">{pct}%</span>
+                </div>
+                <div class="h-1 rounded-full bg-secondary overflow-hidden">
+                  <div class="h-full rounded-full transition-all duration-500 {pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-yellow-500' : 'bg-primary'}"
+                       style="width: {pct}%"></div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- Memory -->

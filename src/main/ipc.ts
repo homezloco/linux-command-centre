@@ -1358,8 +1358,12 @@ export async function registerIpcHandlers(): Promise<void> {
 
   async function getSshStatus() {
     try {
+      // "Installed" = binary present OR dpkg reports it installed
+      const sshdBin = await run('which sshd 2>/dev/null').catch(() => '')
+      const dpkgOut = await run('dpkg -l openssh-server 2>/dev/null').catch(() => '')
+      const installed = sshdBin.trim().length > 0 || /^ii\s+openssh-server/m.test(dpkgOut)
+
       const serviceOut = await run('systemctl status sshd 2>/dev/null || systemctl status ssh 2>/dev/null').catch(() => '')
-      const installed = serviceOut.length > 0
       const running = serviceOut.includes('Active: active (running)')
 
       let port = 22
@@ -1578,17 +1582,31 @@ export async function registerIpcHandlers(): Promise<void> {
     const cpuModel = cpuInfo.match(/^model name\s*:\s*(.+)/m)?.[1]?.trim() ?? 'Unknown CPU'
     const cpuCores = (cpuInfo.match(/^processor\s*:/gm) || []).length
 
-    // CPU usage (2 samples ~150ms apart)
-    async function getCpuTimes() {
+    // CPU usage — all cores in one /proc/stat read
+    async function getCpuAllTimes() {
       const stat = await readFile('/proc/stat', 'utf8').catch(() => '')
-      const nums = stat.split('\n')[0].split(/\s+/).slice(1).map(Number)
-      const idle = nums[3] + (nums[4] || 0)
-      return { idle, total: nums.reduce((a, b) => a + b, 0) }
+      const result: { name: string; idle: number; total: number }[] = []
+      for (const line of stat.split('\n')) {
+        if (!line.startsWith('cpu')) break
+        const parts = line.split(/\s+/)
+        const nums = parts.slice(1).map(Number)
+        result.push({ name: parts[0], idle: nums[3] + (nums[4] || 0), total: nums.reduce((a, b) => a + b, 0) })
+      }
+      return result
     }
-    const t1 = await getCpuTimes()
+    const allT1 = await getCpuAllTimes()
     await new Promise<void>(r => setTimeout(r, 150))
-    const t2 = await getCpuTimes()
-    const cpuUsage = Math.round((1 - (t2.idle - t1.idle) / (t2.total - t1.total)) * 100)
+    const allT2 = await getCpuAllTimes()
+
+    const cpuDelta = (name: string) => {
+      const a = allT1.find(t => t.name === name)
+      const b = allT2.find(t => t.name === name)
+      if (!a || !b) return 0
+      const td = b.total - a.total
+      return td > 0 ? Math.max(0, Math.min(100, Math.round((1 - (b.idle - a.idle) / td) * 100))) : 0
+    }
+    const cpuUsage = cpuDelta('cpu')
+    const coreUsages = allT1.filter(t => t.name !== 'cpu').map(t => cpuDelta(t.name))
 
     // Memory from /proc/meminfo
     const memInfo = await readFile('/proc/meminfo', 'utf8').catch(() => '')
@@ -1615,7 +1633,7 @@ export async function registerIpcHandlers(): Promise<void> {
       kernel: kernel.trim(),
       arch: arch.trim(),
       uptime: { days: uptimeDays, hours: uptimeHrs, minutes: uptimeMins, totalSeconds: uptimeSecs },
-      cpu: { model: cpuModel, cores: cpuCores, usage: Math.max(0, Math.min(100, cpuUsage)) },
+      cpu: { model: cpuModel, cores: cpuCores, usage: Math.max(0, Math.min(100, cpuUsage)), coreUsages },
       memory: {
         total: memTotal,
         used: Math.max(0, memUsed),
