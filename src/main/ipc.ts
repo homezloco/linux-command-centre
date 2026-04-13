@@ -716,6 +716,218 @@ export async function registerIpcHandlers(): Promise<void> {
       (await run('dmesg').catch(() => '')).includes('EBUSY')
     return { ipu6Loaded, halInstalled, int3472Error }
   })
+
+  // ── Security ───────────────────────────────────────────────────────────────
+  async function getFirewallStatus() {
+    try {
+      const ufwOut = await run('ufw status verbose').catch(() => '')
+      const lines = ufwOut.split('\n')
+      const statusLine = lines.find(l => l.toLowerCase().includes('status:'))
+      const active = statusLine?.toLowerCase().includes('active') ?? false
+
+      const defaultLines = lines.filter(l => l.includes('Default:'))
+      const defaultIncoming = defaultLines.find(l => l.includes('incoming'))?.match(/Default:\s*(\w+)/)?.[1] ?? 'deny'
+      const defaultOutgoing = defaultLines.find(l => l.includes('outgoing'))?.match(/Default:\s*(\w+)/)?.[1] ?? 'allow'
+
+      const rules = lines.filter(l => l.includes('ALLOW') || l.includes('DENY') || l.includes('REJECT')).length
+
+      return {
+        installed: ufwOut.length > 0,
+        active,
+        rules,
+        defaultIncoming,
+        defaultOutgoing
+      }
+    } catch {
+      return { installed: false, active: false, rules: 0, defaultIncoming: 'deny', defaultOutgoing: 'allow' }
+    }
+  }
+
+  async function getOpenPorts() {
+    try {
+      const ssOut = await run('ss -tlnp -4').catch(() => '')
+      const ports: { protocol: string; port: string; service: string; pid?: string }[] = []
+      const seen = new Set<string>()
+
+      for (const line of ssOut.split('\n').slice(1)) {
+        if (!line.trim()) continue
+        const parts = line.trim().split(/\s+/)
+        if (parts.length < 5) continue
+
+        const state = parts[0]
+        const localAddr = parts[3]
+        const portMatch = localAddr?.match(/:(\d+)$/)
+        if (!portMatch) continue
+
+        const port = portMatch[1]
+        const protocol = parts[0]?.includes('udp') ? 'UDP' : 'TCP'
+
+        // Extract process info if available
+        const processPart = parts.slice(5).join(' ')
+        const pidMatch = processPart?.match(/pid=(\d+)/)
+        const nameMatch = processPart?.match(/users:\(\("([^"]+)"/) ?? processPart?.match(/([^,]+),pid=/)
+        const service = nameMatch?.[1] ?? 'Unknown'
+
+        const key = `${protocol}-${port}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          ports.push({ protocol, port, service, pid: pidMatch?.[1] })
+        }
+      }
+
+      return ports.sort((a, b) => parseInt(a.port) - parseInt(b.port))
+    } catch {
+      return []
+    }
+  }
+
+  async function getSshStatus() {
+    try {
+      const serviceOut = await run('systemctl status sshd 2>/dev/null || systemctl status ssh 2>/dev/null').catch(() => '')
+      const installed = serviceOut.length > 0
+      const running = serviceOut.includes('Active: active (running)')
+
+      let port = 22
+      let passwordAuth = true
+      let rootLogin = true
+
+      try {
+        const sshConfig = await run('sshd -T 2>/dev/null || cat /etc/ssh/sshd_config 2>/dev/null').catch(() => '')
+        const portMatch = sshConfig.match(/^port\s+(\d+)/mi)
+        if (portMatch) port = parseInt(portMatch[1], 10)
+
+        const passwordMatch = sshConfig.match(/^passwordauthentication\s+(\w+)/mi)
+        if (passwordMatch) passwordAuth = passwordMatch[1].toLowerCase() === 'yes'
+
+        const rootMatch = sshConfig.match(/^permitrootlogin\s+(\w+)/mi)
+        if (rootMatch) {
+          rootLogin = rootMatch[1].toLowerCase() === 'yes' || rootMatch[1].toLowerCase() === 'prohibit-password'
+        }
+      } catch { /* ignore config read errors */ }
+
+      return { installed, running, port, passwordAuth, rootLogin }
+    } catch {
+      return { installed: false, running: false, port: 22, passwordAuth: true, rootLogin: true }
+    }
+  }
+
+  async function getEncryptionStatus() {
+    try {
+      const cryptOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT -J 2>/dev/null || lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT').catch(() => '')
+      const devices: { name: string; type: string; encrypted: boolean }[] = []
+
+      // Try JSON first, fallback to text
+      if (cryptOut.startsWith('{')) {
+        const parsed = JSON.parse(cryptOut)
+        const checkBlock = (dev: any) => {
+          const isCrypt = dev.fstype === 'crypto_LUKS' || dev.type === 'crypt'
+          devices.push({ name: dev.name, type: dev.type, encrypted: isCrypt })
+          if (dev.children) dev.children.forEach(checkBlock)
+        }
+        parsed.blockdevices?.forEach(checkBlock)
+      } else {
+        // Text fallback - look for crypt entries
+        for (const line of cryptOut.split('\n')) {
+          if (line.includes('crypt') || line.includes('LUKS')) {
+            const parts = line.trim().split(/\s+/)
+            devices.push({ name: parts[0], type: parts[1], encrypted: true })
+          }
+        }
+      }
+
+      const encrypted = devices.some(d => d.encrypted)
+      return { encrypted, devices }
+    } catch {
+      return { encrypted: false, devices: [] }
+    }
+  }
+
+  async function getFailedLogins() {
+    try {
+      // Try lastb first (requires root, shows bad logins)
+      const lastbOut = await run('lastb -w -s -7days 2>/dev/null || lastb -w 2>/dev/null').catch(() => '')
+      const attempts: Record<string, { count: number; latest: string }> = {}
+
+      for (const line of lastbOut.split('\n')) {
+        if (!line.trim() || line.includes('begins') || line.includes('wtmp')) continue
+        const parts = line.trim().split(/\s+/)
+        const user = parts[0]
+        const date = parts.slice(-6, -1).join(' ') || 'Unknown'
+
+        if (!attempts[user]) {
+          attempts[user] = { count: 0, latest: date }
+        }
+        attempts[user].count++
+        if (new Date(date) > new Date(attempts[user].latest)) {
+          attempts[user].latest = date
+        }
+      }
+
+      return Object.entries(attempts).map(([user, data]) => ({
+        user,
+        count: data.count,
+        latest: data.latest
+      })).sort((a, b) => b.count - a.count).slice(0, 10)
+    } catch {
+      return []
+    }
+  }
+
+  async function getSecurityUpdates() {
+    try {
+      // Check for security updates
+      const aptOut = await run('apt list --upgradable 2>/dev/null').catch(() => '')
+      const lines = aptOut.split('\n')
+
+      let securityCount = 0
+      let kernelUpdate = false
+
+      for (const line of lines) {
+        if (line.includes('-security') || line.includes('security.')) {
+          securityCount++
+        }
+        if (line.match(/linux-(image|headers|generic)/)) {
+          kernelUpdate = true
+        }
+      }
+
+      return { securityUpdates: securityCount, kernelUpdates: kernelUpdate }
+    } catch {
+      return { securityUpdates: 0, kernelUpdates: false }
+    }
+  }
+
+  ipcMain.handle('security:status', async () => {
+    const [firewall, ports, ssh, encryption, failedLogins, updates] = await Promise.all([
+      getFirewallStatus(),
+      getOpenPorts(),
+      getSshStatus(),
+      getEncryptionStatus(),
+      getFailedLogins(),
+      getSecurityUpdates()
+    ])
+
+    return {
+      firewall,
+      ports,
+      ssh,
+      encryption,
+      failedLogins,
+      securityUpdates: updates.securityUpdates,
+      kernelUpdates: updates.kernelUpdates
+    }
+  })
+
+  ipcMain.handle('firewall:set', async (_, action: 'enable' | 'disable') => {
+    if (!['enable', 'disable'].includes(action)) throw new Error('Invalid action')
+    return privilegedOp('firewall-action', action)
+  })
+
+  ipcMain.handle('ssh:set', async (_, action: 'start' | 'stop') => {
+    if (!['start', 'stop'].includes(action)) throw new Error('Invalid action')
+    const service = await run('systemctl list-unit-files | grep -E "^(ssh|sshd)\\.service" | head -1 | cut -d" " -f1').catch(() => 'ssh.service')
+    return privilegedOp('service-action', action, service.trim() || 'ssh.service')
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

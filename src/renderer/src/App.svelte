@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
-           Zap, Mouse, Camera, Moon, RefreshCw, Info, LayoutGrid } from 'lucide-svelte'
+           Zap, Mouse, Camera, Moon, RefreshCw, Info, LayoutGrid, Shield } from 'lucide-svelte'
   import BatteryPanel from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel from './modules/wifi/WifiPanel.svelte'
@@ -11,6 +11,7 @@
   import TouchpadPanel from './modules/touchpad/TouchpadPanel.svelte'
   import UpdatesPanel from './modules/updates/UpdatesPanel.svelte'
   import StartupPanel from './modules/startup/StartupPanel.svelte'
+  import SecurityPanel from './modules/security/SecurityPanel.svelte'
 
   type Module = {
     id: string
@@ -28,6 +29,7 @@
     { id: 'wifi',      label: 'Wi-Fi',     icon: Wifi,        component: WifiPanel },
     { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth,   component: BluetoothPanel },
     { id: 'touchpad',  label: 'Touchpad',  icon: Mouse,       component: TouchpadPanel },
+    { id: 'security',  label: 'Security',  icon: Shield,      component: SecurityPanel },
     { id: 'startup',   label: 'Startup',   icon: LayoutGrid,  component: StartupPanel },
     { id: 'updates',   label: 'Updates',   icon: RefreshCw,   component: UpdatesPanel },
   ]

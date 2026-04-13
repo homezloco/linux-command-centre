@@ -122,6 +122,12 @@ const ops = {
     if (!['start', 'stop', 'enable', 'disable', 'restart'].includes(action)) throw new Error('Invalid action')
     execFileSync('systemctl', [action, service])
     console.log(`systemctl ${action} ${service}`)
+  },
+
+  'firewall-action'(action) {
+    if (!['enable', 'disable'].includes(action)) throw new Error('Action must be enable or disable')
+    execFileSync('ufw', [action], { stdio: 'inherit' })
+    console.log(`UFW ${action}d`)
   }
 }
 
