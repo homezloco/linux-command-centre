@@ -114,16 +114,15 @@
           Output Device
         </div>
         <button onclick={() => showOutputSelect = !showOutputSelect} class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-          {#const current = status.sinks.find(s => s.isDefault)}
-          <span class="truncate max-w-[150px]">{current?.description || 'Select'}</span>
+          <span class="truncate max-w-[150px]">{status.sinks.find(s => s.isDefault)?.description || 'Select'}</span>
           <ChevronDown size={14} class={showOutputSelect ? 'rotate-180' : ''} />
         </button>
       </div>
       {#if showOutputSelect}
         <div class="divide-y divide-border border-t border-border -mx-4 px-4 pt-2">
           {#each status.sinks as sink}
+            {@const Icon = deviceIcon(sink.description)}
             <button onclick={() => setDefaultSink(sink.id)} class="w-full flex items-center gap-3 py-2 text-left hover:text-primary transition-colors">
-              {@const Icon = deviceIcon(sink.description)}
               <Icon size={14} class={sink.isDefault ? 'text-primary' : 'text-muted-foreground'} />
               <span class="text-sm {sink.isDefault ? 'font-medium text-primary' : ''}">{sink.description}</span>
             </button>
@@ -140,8 +139,7 @@
           Input Device
         </div>
         <button onclick={() => showInputSelect = !showInputSelect} class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-          {#const current = status.sources.find(s => s.isDefault)}
-          <span class="truncate max-w-[150px]">{current?.description || 'Select'}</span>
+          <span class="truncate max-w-[150px]">{status.sources.find(s => s.isDefault)?.description || 'Select'}</span>
           <ChevronDown size={14} class={showInputSelect ? 'rotate-180' : ''} />
         </button>
       </div>

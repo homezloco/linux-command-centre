@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
-           Zap, Mouse, Camera, Moon, RefreshCw, Info, LayoutGrid, Shield } from 'lucide-svelte'
+           Zap, Mouse, Camera, Moon, RefreshCw, Info, LayoutGrid, Shield,
+           HardDrive, Server } from 'lucide-svelte'
   import BatteryPanel from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel from './modules/wifi/WifiPanel.svelte'
@@ -12,6 +13,8 @@
   import UpdatesPanel from './modules/updates/UpdatesPanel.svelte'
   import StartupPanel from './modules/startup/StartupPanel.svelte'
   import SecurityPanel from './modules/security/SecurityPanel.svelte'
+  import StoragePanel from './modules/storage/StoragePanel.svelte'
+  import SystemPanel from './modules/system/SystemPanel.svelte'
 
   type Module = {
     id: string
@@ -21,6 +24,7 @@
   }
 
   const modules: Module[] = [
+    { id: 'system',    label: 'System',    icon: Server,      component: SystemPanel },
     { id: 'battery',   label: 'Battery',   icon: Battery,     component: BatteryPanel },
     { id: 'thermal',   label: 'Thermal',   icon: Thermometer, component: ThermalPanel },
     { id: 'power',     label: 'Power',     icon: Zap,         component: PowerPanel },
@@ -29,12 +33,13 @@
     { id: 'wifi',      label: 'Wi-Fi',     icon: Wifi,        component: WifiPanel },
     { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth,   component: BluetoothPanel },
     { id: 'touchpad',  label: 'Touchpad',  icon: Mouse,       component: TouchpadPanel },
+    { id: 'storage',   label: 'Storage',   icon: HardDrive,   component: StoragePanel },
     { id: 'security',  label: 'Security',  icon: Shield,      component: SecurityPanel },
     { id: 'startup',   label: 'Startup',   icon: LayoutGrid,  component: StartupPanel },
     { id: 'updates',   label: 'Updates',   icon: RefreshCw,   component: UpdatesPanel },
   ]
 
-  let active = $state('battery')
+  let active = $state('system')
   const current = $derived(modules.find(m => m.id === active)!)
 </script>
 

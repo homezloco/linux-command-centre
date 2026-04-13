@@ -152,7 +152,7 @@
       <p class="text-sm font-medium">Available networks</p>
       <button onclick={scan} disabled={scanning}
         class="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50">
-        <RefreshCw size={13} class="{scanning ? 'animate-spin' : ''}" />
+        <RefreshCw size={13} class={scanning ? 'animate-spin' : ''} />
       </button>
     </div>
 
@@ -245,6 +245,7 @@
       </div>
       <button
         onclick={toggleMacRandomization}
+        aria-label="Toggle MAC address randomization"
         class="relative w-11 h-6 rounded-full transition-colors {macRandomization ? 'bg-primary' : 'bg-secondary border border-border'}"
       >
         <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {macRandomization ? 'translate-x-5' : ''}"></span>

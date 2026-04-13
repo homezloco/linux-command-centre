@@ -658,7 +658,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
       for (const line of out.split('\n')) {
         // Monitor line: "HDMI-A-1 "Dell U2720Q" (connected)"
-        const monitorMatch = line.match(/^([\w-]+)\s+"?([^"]*)"?\s*(\(connected|\(disconnected))?/)
+        const monitorMatch = line.match(/^([\w-]+)\s+"?([^"]*)"?\s*(\(connected\b|\(disconnected\b)?/)
         if (monitorMatch) {
           if (currentMonitor && currentMonitor.name) {
             monitors.push({ ...currentMonitor, modes: currentModes } as Monitor)

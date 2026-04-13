@@ -158,11 +158,12 @@
 
     <!-- Firewall -->
     <div class="rounded-xl border border-border bg-card overflow-hidden">
-      <button
-        onclick={() => toggleSection('firewall')}
-        class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
-      >
-        <div class="flex items-center gap-3">
+      <div class="flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors">
+        <button
+          onclick={() => toggleSection('firewall')}
+          class="flex items-center gap-3 flex-1 text-left"
+          aria-label="Toggle firewall section"
+        >
           {#if status.firewall?.active}
             <ShieldCheck size={18} class="text-green-400" />
           {:else if status.firewall?.installed}
@@ -182,12 +183,13 @@
               {/if}
             </p>
           </div>
-        </div>
+        </button>
         <div class="flex items-center gap-2">
           {#if status.firewall?.installed}
             <button
-              onclick={(e) => { e.stopPropagation(); toggleFirewall() }}
+              onclick={toggleFirewall}
               disabled={firewallToggling}
+              aria-label="Toggle firewall"
               class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
                      {status.firewall.active ? 'bg-green-400' : 'bg-secondary border border-border'}"
             >
@@ -195,13 +197,15 @@
                            {status.firewall.active ? 'translate-x-5' : ''}"></span>
             </button>
           {/if}
-          {#if expanded.firewall}
-            <ChevronUp size={16} class="text-muted-foreground" />
-          {:else}
-            <ChevronDown size={16} class="text-muted-foreground" />
-          {/if}
+          <button onclick={() => toggleSection('firewall')} aria-label="Expand firewall" class="text-muted-foreground">
+            {#if expanded.firewall}
+              <ChevronUp size={16} />
+            {:else}
+              <ChevronDown size={16} />
+            {/if}
+          </button>
         </div>
-      </button>
+      </div>
 
       {#if expanded.firewall && status.firewall}
         <div class="px-4 pb-4 pt-1 space-y-2 border-t border-border">
@@ -271,11 +275,12 @@
 
     <!-- SSH Status -->
     <div class="rounded-xl border border-border bg-card overflow-hidden">
-      <button
-        onclick={() => toggleSection('ssh')}
-        class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
-      >
-        <div class="flex items-center gap-3">
+      <div class="flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors">
+        <button
+          onclick={() => toggleSection('ssh')}
+          class="flex items-center gap-3 flex-1 text-left"
+          aria-label="Toggle SSH section"
+        >
           {#if status.ssh?.running}
             <Terminal size={18} class="text-yellow-400" />
           {:else}
@@ -293,12 +298,13 @@
               {/if}
             </p>
           </div>
-        </div>
+        </button>
         <div class="flex items-center gap-2">
           {#if status.ssh?.installed}
             <button
-              onclick={(e) => { e.stopPropagation(); toggleSsh() }}
+              onclick={toggleSsh}
               disabled={sshToggling}
+              aria-label="Toggle SSH server"
               class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
                      {status.ssh.running ? 'bg-yellow-400' : 'bg-secondary border border-border'}"
             >
@@ -306,13 +312,15 @@
                            {status.ssh.running ? 'translate-x-5' : ''}"></span>
             </button>
           {/if}
-          {#if expanded.ssh}
-            <ChevronUp size={16} class="text-muted-foreground" />
-          {:else}
-            <ChevronDown size={16} class="text-muted-foreground" />
-          {/if}
+          <button onclick={() => toggleSection('ssh')} aria-label="Expand SSH" class="text-muted-foreground">
+            {#if expanded.ssh}
+              <ChevronUp size={16} />
+            {:else}
+              <ChevronDown size={16} />
+            {/if}
+          </button>
         </div>
-      </button>
+      </div>
 
       {#if expanded.ssh && status.ssh?.installed}
         <div class="px-4 pb-4 pt-1 space-y-2 border-t border-border">

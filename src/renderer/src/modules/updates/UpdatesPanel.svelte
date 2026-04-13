@@ -228,12 +228,14 @@
             <span class="text-sm font-medium">Security Updates ({securityPackages.length})</span>
           </div>
           <div class="flex items-center gap-2">
-            <button
+            <span
+              role="button" tabindex="0"
               onclick={(e) => { e.stopPropagation(); selectAll(securityPackages, true) }}
-              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded"
+              onkeydown={(e) => e.key === 'Enter' && selectAll(securityPackages, true)}
+              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded cursor-pointer"
             >
               Select all
-            </button>
+            </span>
             {#if expandSecurity}
               <ChevronUp size={16} class="text-muted-foreground" />
             {:else}
@@ -286,12 +288,14 @@
             <span class="text-sm font-medium">Regular Updates ({regularPackages.length})</span>
           </div>
           <div class="flex items-center gap-2">
-            <button
+            <span
+              role="button" tabindex="0"
               onclick={(e) => { e.stopPropagation(); selectAll(regularPackages, true) }}
-              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded"
+              onkeydown={(e) => e.key === 'Enter' && selectAll(regularPackages, true)}
+              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded cursor-pointer"
             >
               Select all
-            </button>
+            </span>
             {#if expandRegular}
               <ChevronUp size={16} class="text-muted-foreground" />
             {:else}

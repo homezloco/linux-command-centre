@@ -127,8 +127,9 @@
             <div class="grid grid-cols-2 gap-3">
               <!-- Resolution -->
               <div class="space-y-1">
-                <label class="text-xs text-muted-foreground">Resolution</label>
+                <label for="res-{monitor.name}" class="text-xs text-muted-foreground">Resolution</label>
                 <select
+                  id="res-{monitor.name}"
                   value={selectedRes}
                   onchange={(e) => selectedResolutions = { ...selectedResolutions, [monitor.name]: (e.target as HTMLSelectElement).value }}
                   class="w-full text-sm rounded-md border border-border bg-secondary/50 px-2 py-1.5"
@@ -143,8 +144,9 @@
 
               <!-- Refresh Rate -->
               <div class="space-y-1">
-                <label class="text-xs text-muted-foreground">Refresh Rate</label>
+                <label for="rate-{monitor.name}" class="text-xs text-muted-foreground">Refresh Rate</label>
                 <select
+                  id="rate-{monitor.name}"
                   value={selectedRate}
                   onchange={(e) => selectedRates = { ...selectedRates, [monitor.name]: parseFloat((e.target as HTMLSelectElement).value) }}
                   class="w-full text-sm rounded-md border border-border bg-secondary/50 px-2 py-1.5"
@@ -209,7 +211,7 @@
           <Moon size={15} />
           Night light
         </div>
-        <button onclick={toggleNightLight}
+        <button onclick={toggleNightLight} aria-label="Toggle night light"
                 class="relative w-11 h-6 rounded-full transition-colors {status.nightLight ? 'bg-primary' : 'bg-secondary'}">
           <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.nightLight ? 'translate-x-5' : ''}"></span>
         </button>

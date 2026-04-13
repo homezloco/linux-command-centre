@@ -115,6 +115,7 @@
           </div>
           <button
             onclick={() => setSetting('tapToClick', !status.tapToClick)}
+            aria-label="Toggle tap to click"
             class="relative w-11 h-6 rounded-full transition-colors {status.tapToClick ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
             <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.tapToClick ? 'translate-x-5' : ''}"></span>
@@ -129,6 +130,7 @@
           </div>
           <button
             onclick={() => setSetting('naturalScrolling', !status.naturalScrolling)}
+            aria-label="Toggle natural scrolling"
             class="relative w-11 h-6 rounded-full transition-colors {status.naturalScrolling ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
             <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.naturalScrolling ? 'translate-x-5' : ''}"></span>
@@ -143,6 +145,7 @@
           </div>
           <button
             onclick={() => setSetting('twoFingerScroll', !status.twoFingerScroll)}
+            aria-label="Toggle two-finger scroll"
             class="relative w-11 h-6 rounded-full transition-colors {status.twoFingerScroll ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
             <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.twoFingerScroll ? 'translate-x-5' : ''}"></span>
@@ -157,6 +160,7 @@
           </div>
           <button
             onclick={() => setSetting('disableWhileTyping', !status.disableWhileTyping)}
+            aria-label="Toggle disable while typing"
             class="relative w-11 h-6 rounded-full transition-colors {status.disableWhileTyping ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
             <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.disableWhileTyping ? 'translate-x-5' : ''}"></span>

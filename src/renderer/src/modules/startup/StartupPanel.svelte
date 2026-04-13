@@ -224,6 +224,7 @@
           <button
             onclick={toggleAppAutostart}
             disabled={appAutostartToggling}
+            aria-label="Toggle start on login"
             class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
                    {appAutostart.enabled ? 'bg-primary' : 'bg-secondary border border-border'}"
           >

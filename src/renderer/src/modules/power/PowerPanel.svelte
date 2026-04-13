@@ -166,8 +166,9 @@
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">On AC power</label>
+          <label for="lid-ac" class="text-xs text-muted-foreground">On AC power</label>
           <select
+            id="lid-ac"
             value={status.lidCloseAc}
             onchange={(e) => setLidClose((e.target as HTMLSelectElement).value, status.lidCloseBattery)}
             class="w-full text-xs rounded-md border border-border bg-secondary/50 px-2 py-1.5"
@@ -178,8 +179,9 @@
           </select>
         </div>
         <div class="space-y-1">
-          <label class="text-xs text-muted-foreground">On battery</label>
+          <label for="lid-bat" class="text-xs text-muted-foreground">On battery</label>
           <select
+            id="lid-bat"
             value={status.lidCloseBattery}
             onchange={(e) => setLidClose(status.lidCloseAc, (e.target as HTMLSelectElement).value)}
             class="w-full text-xs rounded-md border border-border bg-secondary/50 px-2 py-1.5"
