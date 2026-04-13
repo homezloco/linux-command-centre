@@ -21,12 +21,44 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('battery:status', async () => {
     const batDir = await findBattery()
     if (!batDir) return null
+
+    const capacity = parseInt(await sysread(`${batDir}/capacity`) || '0')
+    const status = await sysread(`${batDir}/status`)
+    const powerNow = parseInt(await sysread(`${batDir}/power_now`) || '0')
+    const energyNow = parseInt(await sysread(`${batDir}/energy_now`) || '0')
+    const energyFull = parseInt(await sysread(`${batDir}/energy_full`) || '0')
+    const energyFullDesign = parseInt(await sysread(`${batDir}/energy_full_design`) || '0')
+    const cycleCount = parseInt(await sysread(`${batDir}/cycle_count`) || '0')
+
+    // Calculate time remaining
+    let timeRemaining: number | null = null
+    if (powerNow > 0) {
+      if (status === 'Discharging') {
+        timeRemaining = Math.round(energyNow / powerNow * 60) // minutes
+      } else if (status === 'Charging') {
+        const energyToFull = energyFull - energyNow
+        timeRemaining = Math.round(energyToFull / powerNow * 60) // minutes
+      }
+    }
+
+    // Calculate wear level (1 - full_capacity/design_capacity)
+    let wearLevel: number | null = null
+    if (energyFullDesign > 0) {
+      wearLevel = Math.round((1 - energyFull / energyFullDesign) * 100)
+    }
+
     return {
-      capacity:   parseInt(await sysread(`${batDir}/capacity`) || '0'),
-      status:     await sysread(`${batDir}/status`),
-      health:     await sysread(`${batDir}/health`),
-      threshold:  parseInt(await sysread(`${batDir}/charge_control_end_threshold`) || '100'),
-      hasThreshold: sysexists(`${batDir}/charge_control_end_threshold`)
+      capacity,
+      status,
+      health: await sysread(`${batDir}/health`),
+      threshold: parseInt(await sysread(`${batDir}/charge_control_end_threshold`) || '100'),
+      hasThreshold: sysexists(`${batDir}/charge_control_end_threshold`),
+      powerNow: Math.round(powerNow / 1000000), // watts
+      timeRemaining,
+      cycleCount,
+      wearLevel,
+      energyFull: Math.round(energyFull / 1000000), // Wh
+      energyFullDesign: Math.round(energyFullDesign / 1000000) // Wh
     }
   })
 
@@ -47,7 +79,43 @@ export async function registerIpcHandlers(): Promise<void> {
         .split('\n')
         .filter(l => l.trim().endsWith(':'))
         .map(l => l.trim().replace(':', '').replace('*', '').trim())
-      return { profile, profiles }
+
+      // Get screen timeout from gsettings (GNOME)
+      const idleDelay = parseInt(await run('gsettings get org.gnome.desktop.session idle-delay 2>/dev/null').catch(() => '600'))
+
+      // Get lid close behavior
+      const lidClose = await run('gsettings get org.gnome.settings-daemon.plugins.power lid-close-ac-action 2>/dev/null').catch(() => 'nothing')
+      const lidCloseBattery = await run('gsettings get org.gnome.settings-daemon.plugins.power lid-close-battery-action 2>/dev/null').catch(() => 'suspend')
+
+      // Get power button action
+      const powerButton = await run('gsettings get org.gnome.settings-daemon.plugins.power power-button-action 2>/dev/null').catch(() => 'interactive')
+
+      // Get battery info if available
+      let batteryTime: number | null = null
+      let batteryPower: number | null = null
+      try {
+        const bat = await findBattery()
+        if (bat) {
+          const powerNow = parseInt(await sysread(`${bat}/power_now`) || '0')
+          const energyNow = parseInt(await sysread(`${bat}/energy_now`) || '0')
+          const status = await sysread(`${bat}/status`)
+          if (powerNow > 0 && status === 'Discharging') {
+            batteryTime = Math.round(energyNow / powerNow * 60) // minutes
+            batteryPower = Math.round(powerNow / 1000000) // watts
+          }
+        }
+      } catch { /* no battery info */ }
+
+      return {
+        profile,
+        profiles,
+        idleDelay,
+        lidCloseAc: lidClose.replace(/'/g, ''),
+        lidCloseBattery: lidCloseBattery.replace(/'/g, ''),
+        powerButton: powerButton.replace(/'/g, ''),
+        batteryTime,
+        batteryPower
+      }
     } catch {
       const profile = await sysread('/sys/firmware/acpi/platform_profile')
       const choices = await sysread('/sys/firmware/acpi/platform_profile_choices')
@@ -62,6 +130,19 @@ export async function registerIpcHandlers(): Promise<void> {
       return privilegedOp('set-power-profile', profile)
     }
     return profile
+  })
+
+  ipcMain.handle('power:setIdleDelay', async (_, seconds: number) => {
+    await run(`gsettings set org.gnome.desktop.session idle-delay ${seconds}`)
+  })
+
+  ipcMain.handle('power:setLidClose', async (_, ac: string, battery: string) => {
+    await run(`gsettings set org.gnome.settings-daemon.plugins.power lid-close-ac-action '${ac}'`)
+    await run(`gsettings set org.gnome.settings-daemon.plugins.power lid-close-battery-action '${battery}'`)
+  })
+
+  ipcMain.handle('power:setPowerButton', async (_, action: string) => {
+    await run(`gsettings set org.gnome.settings-daemon.plugins.power power-button-action '${action}'`)
   })
 
   // ── WiFi ───────────────────────────────────────────────────────────────────
@@ -306,15 +387,114 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   // ── Audio ──────────────────────────────────────────────────────────────────
+  type AudioDevice = {
+    id: string
+    name: string
+    description: string
+    isDefault: boolean
+  }
+
+  type AudioStream = {
+    id: string
+    name: string
+    appName: string
+    volume: number
+    muted: boolean
+    sinkId: string
+  }
+
+  async function parseWpctlStatus(): Promise<{ sinks: AudioDevice[], sources: AudioDevice[] }> {
+    try {
+      const out = await run('wpctl status 2>/dev/null').catch(() => '')
+      const lines = out.split('\n')
+
+      const sinks: AudioDevice[] = []
+      const sources: AudioDevice[] = []
+
+      let inSinks = false
+      let inSources = false
+
+      for (const line of lines) {
+        if (line.includes('Sinks:')) { inSinks = true; inSources = false; continue }
+        if (line.includes('Sources:')) { inSinks = false; inSources = true; continue }
+        if (line.match(/^\s*$/)) { inSinks = false; inSources = false; continue }
+
+        // Match device line: [number] + name [description] [vol] [muted]
+        const match = line.match(/^\s*(\d+)\.\s+(.+?)\s+\[([^\]]+)\]/)
+        if (!match) continue
+
+        const [, id, name, desc] = match
+        const isDefault = line.includes('[vol:')
+
+        const device = { id, name: name.trim(), description: desc.trim(), isDefault }
+
+        if (inSinks) sinks.push(device)
+        if (inSources) sources.push(device)
+      }
+
+      return { sinks, sources }
+    } catch {
+      return { sinks: [], sources: [] }
+    }
+  }
+
+  async function getAudioStreams(): Promise<AudioStream[]> {
+    try {
+      // Use pactl to get per-application streams
+      const out = await run('pactl list sink-inputs 2>/dev/null || pw-dump 2>/dev/null | jq -r \'.[] | select(.type == "PipeWire:Interface:Node" and .info.props["media.class"] == "Stream/Output/Audio")\'').catch(() => '')
+      const streams: AudioStream[] = []
+
+      // Parse pactl format
+      let current: Partial<AudioStream> = {}
+      for (const line of out.split('\n')) {
+        if (line.startsWith('Sink Input #')) {
+          if (current.id) streams.push(current as AudioStream)
+          current = { id: line.match(/#(\d+)/)?.[1] || '' }
+        }
+        const nameMatch = line.match(/Name:\s+(.+)/)
+        if (nameMatch) current.name = nameMatch[1].trim()
+
+        const appMatch = line.match(/application\.name = "([^"]+)"/) || line.match(/application.process.binary = "([^"]+)"/) || line.match(/application\.name:\s+(.+)/)
+        if (appMatch) current.appName = appMatch[1].trim()
+
+        const volMatch = line.match(/Volume:\s+[^:]+:\s*\d+\s*\/\s*(\d+)/) || line.match(/(\d+)%/)
+        if (volMatch) current.volume = parseInt(volMatch[1], 10)
+
+        const muteMatch = line.match(/Mute:\s+(yes|no)/i)
+        if (muteMatch) current.muted = muteMatch[1].toLowerCase() === 'yes'
+
+        const sinkMatch = line.match(/Sink:\s+(\d+)/)
+        if (sinkMatch) current.sinkId = sinkMatch[1]
+      }
+      if (current.id) streams.push(current as AudioStream)
+
+      return streams
+    } catch {
+      return []
+    }
+  }
+
   ipcMain.handle('audio:status', async () => {
     try {
       const volOutput = await run('wpctl get-volume @DEFAULT_AUDIO_SINK@')
       const match = volOutput.match(/Volume:\s+([\d.]+)/)
       const volume = match ? Math.round(parseFloat(match[1]) * 100) : 0
       const muted = volOutput.includes('[MUTED]')
-      return { volume, muted }
+
+      const { sinks, sources } = await parseWpctlStatus()
+      const streams = await getAudioStreams()
+
+      return {
+        volume,
+        muted,
+        defaultSink: sinks.find(s => s.isDefault)?.id || null,
+        defaultSource: sources.find(s => s.isDefault)?.id || null,
+        sinks,
+        sources,
+        streams
+      }
     } catch {
-      return { volume: 0, muted: false }
+      return { volume: 0, muted: false, sinks: [], sources: [], streams: [] }
     }
   })
 
@@ -327,7 +507,114 @@ export async function registerIpcHandlers(): Promise<void> {
     await run('wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle')
   })
 
+  ipcMain.handle('audio:setDefaultSink', async (_, id: string) => {
+    await run(`wpctl set-default ${id}`)
+  })
+
+  ipcMain.handle('audio:setDefaultSource', async (_, id: string) => {
+    await run(`wpctl set-default ${id}`)
+  })
+
+  ipcMain.handle('audio:setStreamVolume', async (_, id: string, volume: number) => {
+    await run(`wpctl set-volume ${id} ${volume}%`)
+  })
+
+  ipcMain.handle('audio:setStreamMute', async (_, id: string, muted: boolean) => {
+    await run(`wpctl set-mute ${id} ${muted ? 1 : 0}`)
+  })
+
   // ── Display ────────────────────────────────────────────────────────────────
+  type DisplayMode = {
+    resolution: string
+    refreshRate: number
+    isCurrent: boolean
+    isPreferred: boolean
+  }
+
+  type Monitor = {
+    name: string
+    connected: boolean
+    resolution: string
+    refreshRate: number
+    position: string
+    primary: boolean
+    scale: number
+    modes: DisplayMode[]
+  }
+
+  async function getMonitors(): Promise<Monitor[]> {
+    try {
+      // Try wlr-randr first (Wayland), then xrandr (X11)
+      const out = await run('wlr-randr 2>/dev/null || xrandr --query 2>/dev/null').catch(() => '')
+      const monitors: Monitor[] = []
+
+      let currentMonitor: Partial<Monitor> | null = null
+      let currentModes: DisplayMode[] = []
+
+      for (const line of out.split('\n')) {
+        // Monitor line: "HDMI-A-1 "Dell U2720Q" (connected)"
+        const monitorMatch = line.match(/^([\w-]+)\s+"?([^"]*)"?\s*(\(connected|\(disconnected))?/)
+        if (monitorMatch) {
+          if (currentMonitor && currentMonitor.name) {
+            monitors.push({ ...currentMonitor, modes: currentModes } as Monitor)
+          }
+          currentMonitor = {
+            name: monitorMatch[1],
+            connected: line.includes('connected') && !line.includes('disconnected'),
+            primary: line.includes('primary'),
+            scale: 1
+          }
+          currentModes = []
+          continue
+        }
+
+        if (!currentMonitor?.connected) continue
+
+        // Parse position and resolution: "  3840x2160 @ 60Hz  0x0       320mm x 180mm"
+        const modeMatch = line.match(/^\s+(\d+)x(\d+)\s+@\s+(\d+(?:\.\d+)?)Hz\s+(\S+)/)
+        if (modeMatch) {
+          const [, w, h, hz, pos] = modeMatch
+          currentMonitor.resolution = `${w}x${h}`
+          currentMonitor.refreshRate = parseFloat(hz)
+          currentMonitor.position = pos
+
+          currentModes.push({
+            resolution: `${w}x${h}`,
+            refreshRate: parseFloat(hz),
+            isCurrent: line.includes('+') || line.includes('*'),
+            isPreferred: line.includes('+')
+          })
+        }
+
+        // xrandr format: "  3840x2160     60.00*+  59.94..."
+        const xrandrModeMatch = line.match(/^\s+(\d+)x(\d+).*?(\d+\.\d+)([*+]+)?/)
+        if (xrandrModeMatch) {
+          const [, w, h, hz, markers] = xrandrModeMatch
+          const mode: DisplayMode = {
+            resolution: `${w}x${h}`,
+            refreshRate: parseFloat(hz),
+            isCurrent: line.includes('*') || !!markers?.includes('*'),
+            isPreferred: line.includes('+') || !!markers?.includes('+')
+          }
+          currentModes.push(mode)
+
+          if (mode.isCurrent) {
+            currentMonitor.resolution = mode.resolution
+            currentMonitor.refreshRate = mode.refreshRate
+          }
+        }
+      }
+
+      if (currentMonitor && currentMonitor.name) {
+        monitors.push({ ...currentMonitor, modes: currentModes } as Monitor)
+      }
+
+      return monitors.filter(m => m.connected)
+    } catch {
+      return []
+    }
+  }
+
   ipcMain.handle('display:status', async () => {
     const bl = await findBacklight()
     let brightness = null
@@ -338,7 +625,20 @@ export async function registerIpcHandlers(): Promise<void> {
     }
     const nightLight = await run('gsettings get org.gnome.settings-daemon.plugins.color night-light-enabled').catch(() => 'false')
     const nlTemp = parseInt(await run('gsettings get org.gnome.settings-daemon.plugins.color night-light-temperature').catch(() => '4000'))
-    return { brightness, nightLight: nightLight.trim() === 'true', nightLightTemp: nlTemp }
+
+    // Get fractional scale from GNOME if available
+    const scale = await run('gsettings get org.gnome.desktop.interface text-scaling-factor 2>/dev/null').catch(() => '1.0')
+    const fractionalScale = parseFloat(scale) || 1.0
+
+    const monitors = await getMonitors()
+
+    return {
+      brightness,
+      nightLight: nightLight.trim() === 'true',
+      nightLightTemp: nlTemp,
+      monitors,
+      fractionalScale
+    }
   })
 
   ipcMain.handle('display:setBrightness', async (_, value: number) => {
@@ -351,6 +651,32 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('display:setNightLightTemp', async (_, temp: number) => {
     await run(`gsettings set org.gnome.settings-daemon.plugins.color night-light-temperature ${temp}`)
+  })
+
+  ipcMain.handle('display:setResolution', async (_, monitor: string, resolution: string, refreshRate?: number) => {
+    const rateStr = refreshRate ? ` --rate ${refreshRate}` : ''
+    return run(`xrandr --output ${monitor} --mode ${resolution}${rateStr}`).catch(() =>
+      run(`wlr-randr --output ${monitor} --mode ${resolution}@${refreshRate || 60}Hz`)
+    )
+  })
+
+  ipcMain.handle('display:setScale', async (_, scale: number) => {
+    // Update GNOME text scaling factor for fractional scaling
+    await run(`gsettings set org.gnome.desktop.interface text-scaling-factor ${scale}`)
+    return { scale }
+  })
+
+  ipcMain.handle('display:setPrimary', async (_, monitor: string) => {
+    await run(`xrandr --output ${monitor} --primary`)
+  })
+
+  ipcMain.handle('display:arrange', async (_, arrangements: { monitor: string; position: string; relativeTo?: string }[]) => {
+    // Build xrandr command for multi-monitor arrangement
+    for (const arr of arrangements) {
+      if (arr.relativeTo) {
+        await run(`xrandr --output ${arr.monitor} --${arr.position} ${arr.relativeTo}`)
+      }
+    }
   })
 
   // ── Sleep ──────────────────────────────────────────────────────────────────
@@ -366,15 +692,123 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   // ── Touchpad ───────────────────────────────────────────────────────────────
+  async function getTouchpadDevices(): Promise<{ name: string; id: string }[]> {
+    try {
+      // Try libinput list-devices first
+      const libinput = await run('libinput list-devices 2>/dev/null || libinput-list-devices 2>/dev/null').catch(() => '')
+      const devices: { name: string; id: string }[] = []
+
+      let inTouchpad = false
+      let currentName = ''
+      for (const line of libinput.split('\n')) {
+        if (line.toLowerCase().includes('touchpad')) {
+          inTouchpad = true
+          currentName = line.split(':')[0]?.trim() || 'Touchpad'
+        }
+        if (inTouchpad && line.includes('Kernel:')) {
+          const eventMatch = line.match(/event(\d+)/)
+          if (eventMatch) {
+            devices.push({ name: currentName, id: `event${eventMatch[1]}` })
+          }
+          inTouchpad = false
+        }
+      }
+
+      if (devices.length === 0) {
+        // Fallback to /proc/bus/input/devices
+        const inputDevices = await sysread('/proc/bus/input/devices').catch(() => '')
+        const lines = inputDevices.split('\n')
+        let currentHandlers = ''
+        let currentName = ''
+
+        for (const line of lines) {
+          if (line.startsWith('N: Name=')) {
+            currentName = line.match(/"([^"]+)"/)?.[1] || ''
+          }
+          if (line.startsWith('H: Handlers=')) {
+            currentHandlers = line
+            if (currentName.toLowerCase().includes('touchpad') || currentName.toLowerCase().includes('mouse')) {
+              const eventMatch = currentHandlers.match(/event(\d+)/)
+              if (eventMatch) {
+                devices.push({ name: currentName, id: `event${eventMatch[1]}` })
+              }
+            }
+          }
+        }
+      }
+
+      return devices
+    } catch {
+      return []
+    }
+  }
+
+  async function getTouchpadSettings(): Promise<{
+    tapToClick: boolean
+    naturalScrolling: boolean
+    speed: number
+    twoFingerScroll: boolean
+    disableWhileTyping: boolean
+  }> {
+    try {
+      // Get settings from gsettings (GNOME/libinput)
+      const tapToClick = await run('gsettings get org.gnome.desktop.peripherals.touchpad tap-to-click 2>/dev/null').catch(() => 'true')
+      const naturalScrolling = await run('gsettings get org.gnome.desktop.peripherals.touchpad natural-scroll 2>/dev/null').catch(() => 'false')
+      const speed = await run('gsettings get org.gnome.desktop.peripherals.touchpad speed 2>/dev/null').catch(() => '0.0')
+      const twoFingerScroll = await run('gsettings get org.gnome.desktop.peripherals.touchpad two-finger-scrolling-enabled 2>/dev/null').catch(() => 'true')
+      const disableWhileTyping = await run('gsettings get org.gnome.desktop.peripherals.touchpad disable-while-typing 2>/dev/null').catch(() => 'true')
+
+      return {
+        tapToClick: tapToClick.trim() === 'true',
+        naturalScrolling: naturalScrolling.trim() === 'true',
+        speed: parseFloat(speed) || 0,
+        twoFingerScroll: twoFingerScroll.trim() === 'true',
+        disableWhileTyping: disableWhileTyping.trim() === 'true'
+      }
+    } catch {
+      return {
+        tapToClick: true,
+        naturalScrolling: false,
+        speed: 0,
+        twoFingerScroll: true,
+        disableWhileTyping: true
+      }
+    }
+  }
+
   ipcMain.handle('touchpad:status', async () => {
-    const detected = existsSync('/proc/bus/input/devices') &&
-      (await sysread('/proc/bus/input/devices')).toLowerCase().includes('gxtp7863')
+    const devices = await getTouchpadDevices()
+    const hasGXTP7863 = devices.some(d => d.name.toLowerCase().includes('gxtp7863'))
     const serviceEnabled = await run('systemctl is-enabled touchpad-rebind.service').catch(() => 'disabled')
-    return { detected, serviceEnabled: serviceEnabled.trim() === 'enabled' }
+    const settings = await getTouchpadSettings()
+
+    return {
+      devices,
+      hasGXTP7863,
+      serviceEnabled: serviceEnabled.trim() === 'enabled',
+      ...settings
+    }
   })
 
   ipcMain.handle('touchpad:rebind', async () => {
     return privilegedOp('touchpad-rebind')
+  })
+
+  ipcMain.handle('touchpad:setSetting', async (_, key: string, value: unknown) => {
+    const gsettingsMap: Record<string, string> = {
+      'tapToClick': 'tap-to-click',
+      'naturalScrolling': 'natural-scroll',
+      'speed': 'speed',
+      'twoFingerScroll': 'two-finger-scrolling-enabled',
+      'disableWhileTyping': 'disable-while-typing'
+    }
+
+    const gsettingsKey = gsettingsMap[key]
+    if (!gsettingsKey) throw new Error(`Unknown setting: ${key}`)
+
+    const valStr = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
+    await run(`gsettings set org.gnome.desktop.peripherals.touchpad ${gsettingsKey} ${valStr}`)
+    return { ok: true }
   })
 
   // ── Kernel version ─────────────────────────────────────────────────────────
@@ -382,84 +816,109 @@ export async function registerIpcHandlers(): Promise<void> {
     return (await run('uname -r')).split('-')[0]  // e.g. "6.17.0"
   })
 
-  // ── Updates check (runs in main process — no CSP/CORS restrictions) ─────────
-  ipcMain.handle('updates:check', async () => {
-    const results: UpdateItem[] = []
+  // ── Updates ────────────────────────────────────────────────────────────────
+  type PackageUpdate = {
+    name: string
+    currentVersion: string
+    newVersion: string
+    size: string
+    isSecurity: boolean
+    source: string
+  }
 
-    // GitHub issues
-    const ghIssues = [
-      { ref: 'intel/ipu6-drivers/399', label: 'Camera: INT3472 GPIO conflict (VGHH-XX)' }
-    ]
-    for (const { ref, label } of ghIssues) {
-      const [owner, repo, number] = ref.split('/')
-      try {
-        const res = await net.fetch(
-          `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
-          { headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'lcc/1.0' } }
-        )
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const d = await res.json() as {
-          state: string; title: string; updated_at: string; comments: number; html_url: string
-        }
-        results.push({
-          label, type: 'github',
-          state: d.state === 'closed' ? 'closed' : 'open',
-          detail: d.title,
-          url: d.html_url,
-          updatedAt: d.updated_at?.slice(0, 10),
-          comments: d.comments,
-        })
-      } catch (e) {
-        results.push({ label, type: 'github', state: 'error', detail: String(e) })
-      }
-    }
-
-    // Kernel version check
+  async function getAptUpdates(): Promise<PackageUpdate[]> {
     try {
-      const raw = await run('uname -r')
-      const running = raw.split('-')[0]
-      const [rMaj, rMin] = running.split('.').map(Number)
-      const ok = rMaj > 6 || (rMaj === 6 && rMin >= 12)
-      results.push({
-        label: 'Kernel ≥ 6.12 (touchpad fix)',
-        type: 'kernel',
-        state: ok ? 'ok' : 'warn',
-        detail: `Running ${running}`,
-      })
-    } catch {
-      results.push({ label: 'Kernel version', type: 'kernel', state: 'unknown', detail: 'Could not read kernel version' })
-    }
+      // Update package list first
+      await run('apt update 2>/dev/null || true').catch(() => '')
 
-    // Fingerprint (local check)
-    results.push({
-      label: 'Fingerprint: Goodix sensor Linux driver',
-      type: 'local',
-      state: 'warn',
-      detail: 'No Linux driver for this model (Goodix on VGHH-XX)',
-      url: 'https://gitlab.freedesktop.org/libfprint/libfprint/-/issues',
-    })
+      // Get upgradeable packages
+      const out = await run('apt list --upgradable 2>/dev/null').catch(() => '')
+      const packages: PackageUpdate[] = []
 
-    // Package updates (apt-cache)
-    for (const [pkg, label] of [
-      ['linux-image-generic-hwe-24.04', 'Kernel HWE updates'],
-      ['libcamhal-ipu6epmtl',           'Camera HAL updates'],
-    ]) {
-      try {
-        const installed  = (await run(`dpkg -l ${pkg}`)).split('\n').find(l => l.startsWith('ii'))?.split(/\s+/)[2] ?? ''
-        const available  = (await run(`apt-cache policy ${pkg}`)).match(/Candidate:\s+(\S+)/)?.[1] ?? ''
-        if (!installed) {
-          results.push({ label, type: 'package', state: 'warn', detail: `${pkg} not installed` })
-        } else if (available && available !== installed) {
-          results.push({ label, type: 'package', state: 'warn', detail: `Update available: ${available} (installed: ${installed})` })
-        } else {
-          results.push({ label, type: 'package', state: 'ok', detail: `Up to date (${installed})` })
-        }
-      } catch {
-        results.push({ label, type: 'package', state: 'unknown', detail: 'Could not check' })
+      for (const line of out.split('\n')) {
+        if (!line.includes('upgradable from:')) continue
+        // Format: package/arch version arch [upgradable from: oldver]
+        const match = line.match(/^(\S+)\/\S+\s+(\S+)\s+\S+\s+\[upgradable from:\s+(\S+)\]/)
+        if (!match) continue
+
+        const [, name, newVer, oldVer] = match
+
+        // Check if security update
+        const policy = await run(`apt-cache policy ${name}`).catch(() => '')
+        const isSecurity = policy.includes('-security') || policy.includes('security.ubuntu.com')
+
+        // Get size from apt-cache
+        const show = await run(`apt-cache show ${name} 2>/dev/null | grep -E '^(Size:|Filename:)' | head -2`).catch(() => '')
+        const sizeMatch = show.match(/Size:\s+(\d+)/)
+        const size = sizeMatch ? formatBytes(parseInt(sizeMatch[1])) : 'Unknown'
+
+        packages.push({
+          name,
+          currentVersion: oldVer,
+          newVersion: newVer,
+          size,
+          isSecurity,
+          source: isSecurity ? 'Security' : 'Regular'
+        })
       }
-    }
 
-    return results
+      return packages.sort((a, b) => (b.isSecurity ? 1 : 0) - (a.isSecurity ? 1 : 0))
+    } catch {
+      return []
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+  }
+
+  async function getRebootRequired(): Promise<boolean> {
+    try {
+      // Check if reboot-required file exists
+      const rebootFile = await sysread('/var/run/reboot-required').catch(() => null)
+      return rebootFile !== null
+    } catch {
+      return false
+    }
+  }
+
+  ipcMain.handle('updates:check', async () => {
+    const packages = await getAptUpdates()
+    const rebootRequired = await getRebootRequired()
+    const runningKernel = (await run('uname -r').catch(() => '')).split('-')[0]
+
+    // Check for kernel update
+    const kernelPkg = packages.find(p => p.name.includes('linux-image'))
+    const kernelUpdateAvailable = !!kernelPkg
+
+    return {
+      packages,
+      rebootRequired,
+      runningKernel,
+      kernelUpdateAvailable,
+      lastCheck: new Date().toISOString()
+    }
+  })
+
+  ipcMain.handle('updates:upgrade', async (_, packages?: string[]) => {
+    // Run apt upgrade via privileged helper
+    if (packages && packages.length > 0) {
+      return privilegedOp('apt-upgrade', packages.join(','))
+    }
+    return privilegedOp('apt-upgrade-all')
+  })
+
+  ipcMain.handle('updates:changelog', async (_, pkg: string) => {
+    try {
+      const changelog = await run(`apt-get changelog ${pkg} 2>/dev/null | head -50`).catch(() => '')
+      return { changelog }
+    } catch {
+      return { changelog: 'Changelog not available' }
+    }
   })
 
   // ── Startup Apps ──────────────────────────────────────────────────────────

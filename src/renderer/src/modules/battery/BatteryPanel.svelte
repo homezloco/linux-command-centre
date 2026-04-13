@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte'
   import { invoke } from '$lib/utils'
   import { streamStore } from '$stores/stream'
-  import { BatteryCharging, Battery, BatteryWarning } from 'lucide-svelte'
+  import { BatteryCharging, Battery, BatteryWarning, Clock, Zap, RotateCw, Gauge } from 'lucide-svelte'
 
   type BatteryStatus = {
     capacity: number
@@ -10,6 +10,12 @@
     health: string
     threshold: number
     hasThreshold: boolean
+    powerNow: number
+    timeRemaining: number | null
+    cycleCount: number
+    wearLevel: number | null
+    energyFull: number
+    energyFullDesign: number
   }
   type BatteryFrame = { timestamp: number; capacity: number; status: string }
 
@@ -26,7 +32,6 @@
   $effect(() => {
     const frame = $stream
     if (frame.timestamp > 0) {
-      // untrack history read so writing it doesn't re-trigger this effect
       history = [...untrack(() => history).slice(-59), { t: frame.timestamp, v: frame.capacity }]
     }
   })
@@ -76,6 +81,13 @@
     if (pct <= 30) return 'bg-yellow-500'
     return 'bg-primary'
   }
+
+  function formatTime(minutes: number): string {
+    const h = Math.floor(minutes / 60)
+    const m = minutes % 60
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+  }
 </script>
 
 {#if loading}
@@ -102,6 +114,22 @@
              style="width: {info.capacity}%"></div>
       </div>
 
+      <!-- Time/Power Row -->
+      {#if info.timeRemaining !== null}
+        <div class="flex items-center gap-2 text-sm">
+          <Clock size={14} class="text-muted-foreground" />
+          <span class="text-muted-foreground">
+            {#if info.status === 'Charging'}
+              {formatTime(info.timeRemaining)} until full
+            {:else if info.status === 'Discharging'}
+              {formatTime(info.timeRemaining)} remaining
+            {:else}
+              {formatTime(info.timeRemaining)}
+            {/if}
+          </span>
+        </div>
+      {/if}
+
       <div class="grid grid-cols-2 gap-3 text-sm">
         <div class="rounded-lg bg-secondary/50 p-3">
           <p class="text-muted-foreground text-xs mb-1">Health</p>
@@ -111,6 +139,33 @@
           <p class="text-muted-foreground text-xs mb-1">Charge limit</p>
           <p class="font-medium">{info.threshold}%</p>
         </div>
+      </div>
+
+      <!-- Extended stats -->
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        <div class="rounded bg-secondary/30 p-2 text-center">
+          <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
+            <Zap size={11} />
+            Power
+          </p>
+          <p class="font-medium">{info.powerNow}W</p>
+        </div>
+        <div class="rounded bg-secondary/30 p-2 text-center">
+          <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
+            <RotateCw size={11} />
+            Cycles
+          </p>
+          <p class="font-medium">{info.cycleCount.toLocaleString()}</p>
+        </div>
+        {#if info.wearLevel !== null}
+          <div class="rounded bg-secondary/30 p-2 text-center">
+            <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
+              <Gauge size={11} />
+              Wear
+            </p>
+            <p class="font-medium {info.wearLevel > 20 ? 'text-yellow-400' : info.wearLevel > 50 ? 'text-red-400' : 'text-green-400'}">{info.wearLevel}%</p>
+          </div>
+        {/if}
       </div>
     </div>
 

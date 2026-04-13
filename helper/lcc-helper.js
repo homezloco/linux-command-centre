@@ -128,6 +128,19 @@ const ops = {
     if (!['enable', 'disable'].includes(action)) throw new Error('Action must be enable or disable')
     execFileSync('ufw', [action], { stdio: 'inherit' })
     console.log(`UFW ${action}d`)
+  },
+
+  'apt-upgrade'(packagesStr) {
+    if (!packagesStr || packagesStr.length === 0) throw new Error('No packages specified')
+    const packages = packagesStr.split(',').filter(p => p.length > 0 && /^[a-zA-Z0-9._+-]+$/.test(p))
+    if (packages.length === 0) throw new Error('Invalid package names')
+    execFileSync('apt-get', ['install', '--only-upgrade', '-y', ...packages], { stdio: 'inherit' })
+    console.log(`Upgraded packages: ${packages.join(', ')}`)
+  },
+
+  'apt-upgrade-all'() {
+    execFileSync('apt-get', ['upgrade', '-y'], { stdio: 'inherit' })
+    console.log('System upgrade completed')
   }
 }
 
