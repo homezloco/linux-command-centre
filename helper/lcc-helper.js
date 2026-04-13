@@ -124,6 +124,18 @@ const ops = {
     console.log(`systemctl ${action} ${service}`)
   },
 
+  'set-timezone'(tz) {
+    if (!tz || !/^[A-Za-z_]+\/[A-Za-z_\/+\-]+$/.test(tz)) throw new Error('Invalid timezone')
+    execFileSync('timedatectl', ['set-timezone', tz])
+    console.log(`Timezone set to ${tz}`)
+  },
+
+  'set-ntp'(enabled) {
+    if (!['true', 'false'].includes(enabled)) throw new Error('Must be true or false')
+    execFileSync('timedatectl', ['set-ntp', enabled])
+    console.log(`NTP set to ${enabled}`)
+  },
+
   'vpn-up'(name) {
     if (!name || name.length > 64) throw new Error('Invalid connection name')
     execFileSync('nmcli', ['connection', 'up', name], { stdio: 'inherit' })

@@ -1842,6 +1842,75 @@ export async function registerIpcHandlers(): Promise<void> {
 
     return { pendingUpdates, securityUpdates, highDisk, vpnActive }
   })
+
+  // ── Keyboard ───────────────────────────────────────────────────────────────
+  ipcMain.handle('keyboard:status', async () => {
+    const gs = (schema: string, key: string) =>
+      run(`gsettings get ${schema} ${key}`).catch(() => '')
+
+    const delayRaw    = await gs('org.gnome.desktop.peripherals.keyboard', 'delay')
+    const intervalRaw = await gs('org.gnome.desktop.peripherals.keyboard', 'repeat-interval')
+    const repeatRaw   = await gs('org.gnome.desktop.peripherals.keyboard', 'repeat')
+    const sourcesRaw  = await gs('org.gnome.desktop.input-sources', 'sources')
+    const xkbOpts     = await gs('org.gnome.desktop.input-sources', 'xkb-options')
+
+    // Parse layout sources: [('xkb', 'us'), ('xkb', 'gb')]
+    const layouts = [...sourcesRaw.matchAll(/\('([^']+)',\s*'([^']+)'\)/g)]
+      .map(m => ({ type: m[1], id: m[2] }))
+
+    // Current active layout from xkbmap
+    const xkbQuery = await run('setxkbmap -query 2>/dev/null').catch(() => '')
+    const activeLayout = xkbQuery.match(/^layout:\s+(.+)/m)?.[1]?.trim() ?? layouts[0]?.id ?? 'us'
+
+    return {
+      delay:    parseInt(delayRaw.replace(/[^0-9]/g, '')) || 500,
+      interval: parseInt(intervalRaw.replace(/[^0-9]/g, '')) || 30,
+      repeat:   repeatRaw.trim() === 'true',
+      layouts,
+      activeLayout,
+      xkbOptions: [...xkbOpts.matchAll(/'([^']+)'/g)].map(m => m[1]).filter(Boolean),
+    }
+  })
+
+  ipcMain.handle('keyboard:set', async (_, opts: {
+    delay?: number; interval?: number; repeat?: boolean
+  }) => {
+    const gs = (schema: string, key: string, val: string) =>
+      run(`gsettings set ${schema} ${key} ${val}`)
+    if (opts.delay    !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'delay',           `uint32 ${opts.delay}`)
+    if (opts.interval !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat-interval', `uint32 ${opts.interval}`)
+    if (opts.repeat   !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat',          String(opts.repeat))
+    return { ok: true }
+  })
+
+  // ── Date & Time ────────────────────────────────────────────────────────────
+  ipcMain.handle('datetime:status', async () => {
+    const tdOut = await run('timedatectl status').catch(() => '')
+
+    const get = (key: string) => tdOut.match(new RegExp(`${key}:\\s+(.+)`))?.[1]?.trim() ?? ''
+    const timezone    = get('Time zone').replace(/\s+\(.*/, '').trim()
+    const ntpEnabled  = /yes|active/i.test(get('NTP service') || get('Network time on'))
+    const ntpSynced   = /yes/i.test(get('NTP synchronized') || get('System clock synchronized'))
+    const localTime   = get('Local time')
+    const universalTime = get('Universal time')
+    const rtcTime     = get('RTC time')
+
+    return { timezone, ntpEnabled, ntpSynced, localTime, universalTime, rtcTime }
+  })
+
+  ipcMain.handle('datetime:listTimezones', async () => {
+    const out = await run('timedatectl list-timezones').catch(() => '')
+    return out.split('\n').filter(Boolean)
+  })
+
+  ipcMain.handle('datetime:setTimezone', async (_, tz: string) => {
+    if (!/^[A-Za-z_]+\/[A-Za-z_\/+\-]+$/.test(tz)) throw new Error('Invalid timezone')
+    return privilegedOp('set-timezone', tz)
+  })
+
+  ipcMain.handle('datetime:setNtp', async (_, enabled: boolean) => {
+    return privilegedOp('set-ntp', enabled ? 'true' : 'false')
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
