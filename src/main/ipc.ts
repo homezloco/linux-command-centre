@@ -1980,6 +1980,98 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('datetime:setNtp', async (_, enabled: boolean) => {
     return privilegedOp('set-ntp', enabled ? 'true' : 'false')
   })
+
+  // ── Appearance ─────────────────────────────────────────────────────────────
+  ipcMain.handle('appearance:status', async () => {
+    const gs = (schema: string, key: string) =>
+      run(`gsettings get ${schema} ${key}`).catch(() => '')
+    const i = 'org.gnome.desktop.interface'
+    const [colorSchemeRaw, gtkThemeRaw, iconThemeRaw, cursorThemeRaw,
+           fontNameRaw, textScaleRaw, cursorSizeRaw] = await Promise.all([
+      gs(i, 'color-scheme'), gs(i, 'gtk-theme'), gs(i, 'icon-theme'),
+      gs(i, 'cursor-theme'), gs(i, 'font-name'), gs(i, 'text-scaling-factor'),
+      gs(i, 'cursor-size'),
+    ])
+
+    const clean = (s: string) => s.trim().replace(/^'|'$/g, '')
+
+    // Enumerate installed GTK themes (dirs that contain gtk-3.0 or gtk-4.0)
+    const themeDirs = ['/usr/share/themes', `${homedir()}/.themes`, `${homedir()}/.local/share/themes`]
+    const themes = new Set<string>()
+    for (const dir of themeDirs) {
+      const entries = await readdir(dir).catch(() => [] as string[])
+      for (const e of entries) {
+        if (existsSync(`${dir}/${e}/gtk-3.0`) || existsSync(`${dir}/${e}/gtk-4.0`)) themes.add(e)
+      }
+    }
+
+    // Enumerate installed icon themes
+    const iconDirs = ['/usr/share/icons', `${homedir()}/.icons`, `${homedir()}/.local/share/icons`]
+    const icons = new Set<string>()
+    for (const dir of iconDirs) {
+      const entries = await readdir(dir).catch(() => [] as string[])
+      for (const e of entries) {
+        if (existsSync(`${dir}/${e}/index.theme`)) icons.add(e)
+      }
+    }
+
+    return {
+      colorScheme:      clean(colorSchemeRaw) || 'default',
+      gtkTheme:         clean(gtkThemeRaw),
+      iconTheme:        clean(iconThemeRaw),
+      cursorTheme:      clean(cursorThemeRaw),
+      fontName:         clean(fontNameRaw),
+      textScale:        parseFloat(textScaleRaw) || 1.0,
+      cursorSize:       parseInt(cursorSizeRaw) || 24,
+      availableThemes:  [...themes].sort(),
+      availableIcons:   [...icons].sort(),
+    }
+  })
+
+  ipcMain.handle('appearance:set', async (_, opts: {
+    colorScheme?: string; gtkTheme?: string; iconTheme?: string
+    cursorTheme?: string; textScale?: number; cursorSize?: number
+  }) => {
+    const gs = (schema: string, key: string, val: string) =>
+      run(`gsettings set ${schema} ${key} ${val}`)
+    const i = 'org.gnome.desktop.interface'
+    if (opts.colorScheme !== undefined) await gs(i, 'color-scheme',        `'${opts.colorScheme}'`)
+    if (opts.gtkTheme    !== undefined) await gs(i, 'gtk-theme',           `'${opts.gtkTheme}'`)
+    if (opts.iconTheme   !== undefined) await gs(i, 'icon-theme',          `'${opts.iconTheme}'`)
+    if (opts.cursorTheme !== undefined) await gs(i, 'cursor-theme',        `'${opts.cursorTheme}'`)
+    if (opts.textScale   !== undefined) await gs(i, 'text-scaling-factor', opts.textScale.toFixed(2))
+    if (opts.cursorSize  !== undefined) await gs(i, 'cursor-size',         String(opts.cursorSize))
+    return { ok: true }
+  })
+
+  // ── Network speed ──────────────────────────────────────────────────────────
+  ipcMain.handle('network:speed', async () => {
+    async function readNetDev() {
+      const raw = await readFile('/proc/net/dev', 'utf8').catch(() => '')
+      const map: Record<string, { rx: number; tx: number }> = {}
+      for (const line of raw.split('\n').slice(2)) {
+        const p = line.trim().split(/\s+/)
+        if (p.length < 10) continue
+        const name = p[0].replace(':', '')
+        map[name] = { rx: parseInt(p[1]) || 0, tx: parseInt(p[9]) || 0 }
+      }
+      return map
+    }
+    const t1 = await readNetDev()
+    await new Promise<void>(r => setTimeout(r, 500))
+    const t2 = await readNetDev()
+
+    const speeds: Record<string, { rxBps: number; txBps: number }> = {}
+    for (const [iface, v2] of Object.entries(t2)) {
+      const v1 = t1[iface]
+      if (!v1) continue
+      speeds[iface] = {
+        rxBps: Math.max(0, (v2.rx - v1.rx) * 2),  // *2 because 500ms sample
+        txBps: Math.max(0, (v2.tx - v1.tx) * 2),
+      }
+    }
+    return speeds
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
