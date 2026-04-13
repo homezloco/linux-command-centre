@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Network, Wifi, Globe, RefreshCw, ArrowDown, ArrowUp, Server, CheckCircle2, XCircle } from 'lucide-svelte'
 
@@ -13,11 +13,14 @@
     gateway: string | null
     dnsServers: string[]
   }
+  type SpeedMap = Record<string, { rxBps: number; txBps: number }>
 
   let status = $state<NetworkStatus | null>(null)
+  let speeds = $state<SpeedMap>({})
   let loading = $state(true)
   let refreshing = $state(false)
   let error = $state('')
+  let speedInterval: ReturnType<typeof setInterval> | undefined
 
   async function load(force = false) {
     if (force) refreshing = true
@@ -29,6 +32,10 @@
     finally { loading = false; refreshing = false }
   }
 
+  async function refreshSpeed() {
+    try { speeds = await invoke<SpeedMap>('network:speed') } catch { /* non-critical */ }
+  }
+
   function fmt(bytes: number): string {
     if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB'
     if (bytes >= 1e9)  return (bytes / 1e9).toFixed(2) + ' GB'
@@ -37,19 +44,25 @@
     return bytes + ' B'
   }
 
+  function fmtSpeed(bps: number): string {
+    if (bps >= 1e9)  return (bps / 1e9).toFixed(1) + ' GB/s'
+    if (bps >= 1e6)  return (bps / 1e6).toFixed(1) + ' MB/s'
+    if (bps >= 1e3)  return (bps / 1e3).toFixed(0) + ' KB/s'
+    return bps + ' B/s'
+  }
+
   function ifaceIcon(iface: NetInterface) {
     if (iface.name.startsWith('wl')) return Wifi
     if (iface.name.startsWith('lo')) return Server
     return Network
   }
 
-  function stateColor(state: string): string {
-    if (state === 'up') return 'text-green-400'
-    if (state === 'down') return 'text-red-400'
-    return 'text-muted-foreground'
-  }
-
-  onMount(() => load())
+  onMount(() => {
+    load()
+    refreshSpeed()
+    speedInterval = setInterval(refreshSpeed, 1000)
+  })
+  onDestroy(() => clearInterval(speedInterval))
 </script>
 
 {#if loading}
@@ -129,16 +142,33 @@
 
         <!-- Traffic stats -->
         {#if iface.rx > 0 || iface.tx > 0}
-          <div class="flex gap-4 text-xs text-muted-foreground pt-1 border-t border-border">
-            <span class="flex items-center gap-1">
-              <ArrowDown size={12} class="text-green-400" />
-              {fmt(iface.rx)}
-            </span>
-            <span class="flex items-center gap-1">
-              <ArrowUp size={12} class="text-blue-400" />
-              {fmt(iface.tx)}
-            </span>
-            <span class="ml-auto">{iface.rxPackets.toLocaleString()} / {iface.txPackets.toLocaleString()} pkts</span>
+          {@const spd = speeds[iface.name]}
+          <div class="pt-1 border-t border-border space-y-1.5">
+            <!-- Live speed -->
+            {#if spd && (spd.rxBps > 0 || spd.txBps > 0)}
+              <div class="flex gap-3 text-xs font-medium">
+                <span class="flex items-center gap-1 text-green-400">
+                  <ArrowDown size={11} />
+                  {fmtSpeed(spd.rxBps)}
+                </span>
+                <span class="flex items-center gap-1 text-blue-400">
+                  <ArrowUp size={11} />
+                  {fmtSpeed(spd.txBps)}
+                </span>
+              </div>
+            {/if}
+            <!-- Cumulative -->
+            <div class="flex gap-4 text-xs text-muted-foreground">
+              <span class="flex items-center gap-1">
+                <ArrowDown size={12} class="text-green-400/60" />
+                {fmt(iface.rx)} total
+              </span>
+              <span class="flex items-center gap-1">
+                <ArrowUp size={12} class="text-blue-400/60" />
+                {fmt(iface.tx)} total
+              </span>
+              <span class="ml-auto">{iface.rxPackets.toLocaleString()} / {iface.txPackets.toLocaleString()} pkts</span>
+            </div>
           </div>
         {/if}
       </div>

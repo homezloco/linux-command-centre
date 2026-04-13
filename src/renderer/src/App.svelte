@@ -3,7 +3,7 @@
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
            Zap, Mouse, RefreshCw, LayoutGrid, Shield, Keyboard,
            HardDrive, Server, Network, Activity, Usb, ScrollText,
-           Lock, Clock, MousePointer } from 'lucide-svelte'
+           Lock, Clock, MousePointer, Paintbrush } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -25,6 +25,7 @@
   import KeyboardPanel   from './modules/keyboard/KeyboardPanel.svelte'
   import DateTimePanel   from './modules/datetime/DateTimePanel.svelte'
   import MousePanel      from './modules/mouse/MousePanel.svelte'
+  import AppearancePanel from './modules/appearance/AppearancePanel.svelte'
   import CommandPalette  from '$lib/CommandPalette.svelte'
   import { invoke }      from '$lib/utils'
 
@@ -65,10 +66,11 @@
     {
       label: 'System',
       items: [
-        { id: 'power',    label: 'Power',    icon: Zap,         component: PowerPanel },
-        { id: 'security', label: 'Security', icon: Shield,      component: SecurityPanel },
-        { id: 'startup',  label: 'Startup',  icon: LayoutGrid,  component: StartupPanel },
-        { id: 'datetime', label: 'Date & Time', icon: Clock,    component: DateTimePanel },
+        { id: 'power',      label: 'Power',      icon: Zap,         component: PowerPanel },
+        { id: 'security',   label: 'Security',   icon: Shield,      component: SecurityPanel },
+        { id: 'startup',    label: 'Startup',    icon: LayoutGrid,  component: StartupPanel },
+        { id: 'datetime',   label: 'Date & Time',icon: Clock,       component: DateTimePanel },
+        { id: 'appearance', label: 'Appearance', icon: Paintbrush,  component: AppearancePanel },
       ]
     },
     {
