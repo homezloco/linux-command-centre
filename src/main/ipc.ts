@@ -2090,6 +2090,246 @@ export async function registerIpcHandlers(): Promise<void> {
     }
     return speeds
   })
+
+  // ── Users ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('users:list', async () => {
+    const passwdOut = await readFile('/etc/passwd', 'utf8').catch(() => '')
+    const groupOut  = await readFile('/etc/group',  'utf8').catch(() => '')
+
+    const sudoMembers = new Set<string>()
+    for (const line of groupOut.split('\n')) {
+      const [name, , , members] = line.split(':')
+      if (name === 'sudo' || name === 'admin' || name === 'wheel') {
+        members?.split(',').filter(Boolean).forEach(m => sudoMembers.add(m.trim()))
+      }
+    }
+
+    const users: { username: string; fullName: string; uid: number; home: string; shell: string; sudo: boolean }[] = []
+    for (const line of passwdOut.split('\n')) {
+      const [username, , uidStr, , gecos, home, shell] = line.split(':')
+      const uid = parseInt(uidStr)
+      if (!username || uid < 1000 || uid === 65534) continue
+      users.push({
+        username,
+        fullName: gecos?.split(',')[0]?.trim() || '',
+        uid,
+        home: home || '',
+        shell: shell?.trim() || '',
+        sudo: sudoMembers.has(username),
+      })
+    }
+    return users
+  })
+
+  ipcMain.handle('users:add', async (_, username: string, fullName: string) => {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    return privilegedOp('user-add', username, fullName || username)
+  })
+
+  ipcMain.handle('users:delete', async (_, username: string) => {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    if (username === 'root') throw new Error('Cannot delete root')
+    return privilegedOp('user-delete', username)
+  })
+
+  ipcMain.handle('users:toggleSudo', async (_, username: string, action: 'add' | 'remove') => {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    if (!['add', 'remove'].includes(action)) throw new Error('Invalid action')
+    return privilegedOp('user-toggle-sudo', username, action)
+  })
+
+  // ── Services ───────────────────────────────────────────────────────────────
+  ipcMain.handle('services:list', async () => {
+    const [unitsOut, filesOut] = await Promise.all([
+      run('systemctl list-units --type=service --all --no-pager --plain 2>/dev/null').catch(() => ''),
+      run('systemctl list-unit-files --type=service --no-pager --plain 2>/dev/null').catch(() => ''),
+    ])
+
+    const enabledMap: Record<string, string> = {}
+    for (const line of filesOut.split('\n').slice(1)) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length >= 2 && parts[0].endsWith('.service')) {
+        enabledMap[parts[0]] = parts[1]
+      }
+    }
+
+    const services: { unit: string; load: string; active: string; sub: string; description: string; enabledState: string }[] = []
+    for (const line of unitsOut.split('\n')) {
+      const trimmed = line.replace(/^[●✗\s]+/, '').trim()
+      const m = trimmed.match(/^(\S+\.service)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)?$/)
+      if (!m) continue
+      const [, unit, load, active, sub, desc = ''] = m
+      services.push({ unit, load, active, sub, description: desc.trim(), enabledState: enabledMap[unit] || 'static' })
+    }
+
+    return services.sort((a, b) => {
+      const o: Record<string, number> = { failed: 0, active: 1, activating: 2, inactive: 3, deactivating: 4 }
+      return (o[a.active] ?? 5) - (o[b.active] ?? 5)
+    })
+  })
+
+  ipcMain.handle('services:action', async (_, unit: string, action: string) => {
+    if (!unit.endsWith('.service')) throw new Error('Must be a .service unit')
+    if (!['start', 'stop', 'restart', 'enable', 'disable'].includes(action)) throw new Error('Invalid action')
+    return privilegedOp('service-action', action, unit)
+  })
+
+  // ── Printers ───────────────────────────────────────────────────────────────
+  ipcMain.handle('printers:list', async () => {
+    const [statusOut, uriOut, defOut] = await Promise.all([
+      run('lpstat -p 2>/dev/null').catch(() => ''),
+      run('lpstat -v 2>/dev/null').catch(() => ''),
+      run('lpstat -d 2>/dev/null').catch(() => ''),
+    ])
+
+    const defaultMatch = defOut.match(/system default destination:\s+(\S+)/)
+    const defaultPrinter = defaultMatch?.[1] || null
+
+    // Parse URIs
+    const uris: Record<string, string> = {}
+    for (const line of uriOut.split('\n')) {
+      const m = line.match(/^device for (\S+): (.+)$/)
+      if (m) uris[m[1]] = m[2].trim()
+    }
+
+    const printers: { name: string; state: string; uri: string; isDefault: boolean }[] = []
+    for (const line of statusOut.split('\n')) {
+      const m = line.match(/^printer (\S+)\s+(.+?)\s*\.?\s*$/)
+      if (!m) continue
+      const name = m[1]
+      const desc = m[2].toLowerCase()
+      const state = desc.includes('idle') ? 'idle' :
+                    desc.includes('processing') ? 'printing' :
+                    desc.includes('stopped') ? 'stopped' : 'unknown'
+      printers.push({ name, state, uri: uris[name] || '', isDefault: name === defaultPrinter })
+    }
+
+    return { printers, default: defaultPrinter }
+  })
+
+  ipcMain.handle('printers:setDefault', async (_, name: string) => {
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid printer name')
+    return run(`lpoptions -d '${name}'`)
+  })
+
+  ipcMain.handle('printers:delete', async (_, name: string) => {
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid printer name')
+    return privilegedOp('printer-delete', name)
+  })
+
+  // ── Firewall rules ──────────────────────────────────────────────────────────
+  ipcMain.handle('firewall:rules', async () => {
+    const raw = await privilegedOp('firewall-status')
+    const rules: { num: number; to: string; action: string; from: string; v6: boolean }[] = []
+    for (const line of raw.split('\n')) {
+      const m = line.match(/^\[\s*(\d+)\]\s+(\S+(?:\s+\S+)?)\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+IN|\s+OUT|\s+FWD)?\s+(.+?)(?:\s+#.*)?$/)
+      if (!m) continue
+      const [, numStr, to, action, from] = m
+      rules.push({ num: parseInt(numStr), to: to.trim(), action, from: from.trim(), v6: to.includes('v6') || from.includes('v6') })
+    }
+    return rules
+  })
+
+  ipcMain.handle('firewall:addRule', async (_, action: string, port: string, proto: string) => {
+    if (!['allow', 'deny', 'reject'].includes(action)) throw new Error('Invalid action')
+    if (!port || !/^\d+$/.test(port) || parseInt(port) > 65535) throw new Error('Invalid port')
+    if (!['tcp', 'udp', 'any'].includes(proto)) throw new Error('Invalid protocol')
+    return privilegedOp('firewall-rule-add', action, port, proto)
+  })
+
+  ipcMain.handle('firewall:deleteRule', async (_, num: number) => {
+    if (!Number.isInteger(num) || num < 1) throw new Error('Invalid rule number')
+    return privilegedOp('firewall-delete-rule', String(num))
+  })
+
+  // ── Notifications ───────────────────────────────────────────────────────────
+  ipcMain.handle('notifications:status', async () => {
+    const gs = (key: string) =>
+      run(`gsettings get org.gnome.desktop.notifications ${key}`).catch(() => '')
+    const [banners, lockScreen] = await Promise.all([
+      gs('show-banners'),
+      gs('show-in-lock-screen'),
+    ])
+    return {
+      dnd:             banners.trim()    === 'false',
+      showInLockScreen: lockScreen.trim() !== 'false',
+    }
+  })
+
+  ipcMain.handle('notifications:set', async (_, opts: { dnd?: boolean; showInLockScreen?: boolean }) => {
+    const gs = (key: string, val: string) =>
+      run(`gsettings set org.gnome.desktop.notifications ${key} ${val}`)
+    if (opts.dnd !== undefined)             await gs('show-banners',       opts.dnd ? 'false' : 'true')
+    if (opts.showInLockScreen !== undefined) await gs('show-in-lock-screen', opts.showInLockScreen ? 'true' : 'false')
+    return { ok: true }
+  })
+
+  // ── Proxy ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('proxy:status', async () => {
+    const p = 'org.gnome.system.proxy'
+    const gs = (schema: string, key: string) =>
+      run(`gsettings get ${schema} ${key}`).catch(() => '')
+    const [mode, autoUrl, ignoreRaw,
+           httpHost, httpPort,
+           httpsHost, httpsPort,
+           socksHost, socksPort] = await Promise.all([
+      gs(p, 'mode'), gs(p, 'autoconfig-url'), gs(p, 'ignore-hosts'),
+      gs(`${p}.http`,  'host'), gs(`${p}.http`,  'port'),
+      gs(`${p}.https`, 'host'), gs(`${p}.https`, 'port'),
+      gs(`${p}.socks`, 'host'), gs(`${p}.socks`, 'port'),
+    ])
+    const clean = (s: string) => s.trim().replace(/^'|'$/g, '')
+
+    const ignoreHosts: string[] = []
+    const ignoreMatch = ignoreRaw.match(/\[([^\]]*)\]/)
+    if (ignoreMatch) {
+      for (const item of ignoreMatch[1].split(',')) {
+        const h = item.trim().replace(/^'|'$/g, '')
+        if (h) ignoreHosts.push(h)
+      }
+    }
+
+    return {
+      mode:       clean(mode) || 'none',
+      autoUrl:    clean(autoUrl),
+      ignoreHosts,
+      http:  { host: clean(httpHost),  port: parseInt(httpPort)  || 8080 },
+      https: { host: clean(httpsHost), port: parseInt(httpsPort) || 8080 },
+      socks: { host: clean(socksHost), port: parseInt(socksPort) || 1080 },
+    }
+  })
+
+  ipcMain.handle('proxy:set', async (_, opts: {
+    mode?: string; autoUrl?: string
+    http?: { host: string; port: number }; https?: { host: string; port: number }
+    socks?: { host: string; port: number }; ignoreHosts?: string[]
+  }) => {
+    const p = 'org.gnome.system.proxy'
+    const gs = (schema: string, key: string, val: string) =>
+      run(`gsettings set ${schema} ${key} ${val}`)
+    if (opts.mode !== undefined) {
+      if (!['none', 'manual', 'auto'].includes(opts.mode)) throw new Error('Invalid mode')
+      await gs(p, 'mode', `'${opts.mode}'`)
+    }
+    if (opts.autoUrl !== undefined) await gs(p, 'autoconfig-url', `'${opts.autoUrl}'`)
+    if (opts.http) {
+      await gs(`${p}.http`, 'host', `'${opts.http.host}'`)
+      await gs(`${p}.http`, 'port', String(opts.http.port))
+    }
+    if (opts.https) {
+      await gs(`${p}.https`, 'host', `'${opts.https.host}'`)
+      await gs(`${p}.https`, 'port', String(opts.https.port))
+    }
+    if (opts.socks) {
+      await gs(`${p}.socks`, 'host', `'${opts.socks.host}'`)
+      await gs(`${p}.socks`, 'port', String(opts.socks.port))
+    }
+    if (opts.ignoreHosts) {
+      const arr = `[${opts.ignoreHosts.map(h => `'${h}'`).join(', ')}]`
+      await gs(p, 'ignore-hosts', arr)
+    }
+    return { ok: true }
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -173,6 +173,60 @@ const ops = {
   'apt-upgrade-all'() {
     execFileSync('apt-get', ['upgrade', '-y'], { stdio: 'inherit' })
     console.log('System upgrade completed')
+  },
+
+  'user-add'(username, fullName) {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    const args = ['-m', '-s', '/bin/bash']
+    if (fullName && fullName !== username) { args.push('-c'); args.push(fullName) }
+    args.push(username)
+    execFileSync('useradd', args)
+    console.log(`User added: ${username}`)
+  },
+
+  'user-delete'(username) {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    if (username === 'root') throw new Error('Cannot delete root')
+    execFileSync('userdel', ['-r', username])
+    console.log(`User deleted: ${username}`)
+  },
+
+  'user-toggle-sudo'(username, action) {
+    if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
+    if (!['add', 'remove'].includes(action)) throw new Error('Action must be add or remove')
+    if (action === 'add') {
+      execFileSync('usermod', ['-aG', 'sudo', username])
+    } else {
+      execFileSync('gpasswd', ['-d', username, 'sudo'])
+    }
+    console.log(`Sudo ${action === 'add' ? 'granted to' : 'revoked from'} ${username}`)
+  },
+
+  'firewall-status'() {
+    const out = execSync('ufw status numbered 2>&1').toString()
+    process.stdout.write(out)
+  },
+
+  'firewall-rule-add'(action, port, proto) {
+    if (!['allow', 'deny', 'reject'].includes(action)) throw new Error('Invalid action')
+    if (!/^\d+$/.test(port) || parseInt(port) > 65535) throw new Error('Invalid port')
+    if (!['tcp', 'udp', 'any'].includes(proto)) throw new Error('Invalid protocol')
+    const rule = proto === 'any' ? port : `${port}/${proto}`
+    execFileSync('ufw', [action, rule], { stdio: 'inherit' })
+    console.log(`UFW rule added: ${action} ${rule}`)
+  },
+
+  'firewall-delete-rule'(numStr) {
+    const num = parseInt(numStr)
+    if (isNaN(num) || num < 1) throw new Error('Invalid rule number')
+    execFileSync('ufw', ['--force', 'delete', String(num)], { stdio: 'inherit' })
+    console.log(`UFW rule ${num} deleted`)
+  },
+
+  'printer-delete'(name) {
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid printer name')
+    execFileSync('lpadmin', ['-x', name])
+    console.log(`Printer deleted: ${name}`)
   }
 }
 
