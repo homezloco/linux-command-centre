@@ -67,8 +67,63 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   // ── Thermal ────────────────────────────────────────────────────────────────
+  async function getThermalThrottling(): Promise<{ throttled: boolean; type: string } | null> {
+    try {
+      // Check for thermal throttling via thermal zones
+      const zones = await readdir('/sys/class/thermal').catch(() => [])
+      for (const zone of zones) {
+        const type = await sysread(`/sys/class/thermal/${zone}/type`).catch(() => '')
+        if (type.toLowerCase().includes('x86_pkg_temp') || type.toLowerCase().includes('cpu')) {
+          const trip = await sysread(`/sys/class/thermal/${zone}/trip_point_0_type`).catch(() => '')
+          const temp = parseInt(await sysread(`/sys/class/thermal/${zone}/temp`) || '0') / 1000
+          const tripTemp = parseInt(await sysread(`/sys/class/thermal/${zone}/trip_point_0_temp`) || '0') / 1000
+          if (trip.toLowerCase().includes('critical') && temp >= tripTemp * 0.95) {
+            return { throttled: true, type: 'Temperature critical' }
+          }
+        }
+      }
+
+      // Check via dmesg for throttling messages
+      const dmesg = await run('dmesg 2>/dev/null | tail -100').catch(() => '')
+      if (dmesg.toLowerCase().includes('throttling') && dmesg.toLowerCase().includes('cpu')) {
+        return { throttled: true, type: 'CPU throttling detected' }
+      }
+
+      // Check MSR for thermal throttling (if rdmsr available)
+      const msr = await run('rdmsr -f 0:0 0x1a0 2>/dev/null || echo 0').catch(() => '0')
+      if (msr.trim() === '1') {
+        return { throttled: true, type: 'Thermal throttling active' }
+      }
+
+      return { throttled: false, type: 'Normal' }
+    } catch {
+      return null
+    }
+  }
+
+  async function getTopProcesses(): Promise<{ name: string; pid: number; cpu: number; mem: number }[]> {
+    try {
+      // Use ps to get top CPU processes
+      const ps = await run('ps -eo pid,comm,pcpu,pmem --sort=-pcpu --no-headers -w | head -5').catch(() => '')
+      return ps.split('\n').filter(Boolean).map(line => {
+        const parts = line.trim().split(/\s+/)
+        return {
+          pid: parseInt(parts[0]) || 0,
+          name: parts[1] || 'unknown',
+          cpu: parseFloat(parts[2]) || 0,
+          mem: parseFloat(parts[3]) || 0
+        }
+      }).filter(p => p.pid > 0)
+    } catch {
+      return []
+    }
+  }
+
   ipcMain.handle('thermal:snapshot', async () => {
-    return collectThermal()
+    const snapshot = await collectThermal()
+    const throttling = await getThermalThrottling()
+    const processes = await getTopProcesses()
+    return { ...snapshot, throttling, processes }
   })
 
   // ── Power ──────────────────────────────────────────────────────────────────
@@ -237,6 +292,56 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('wifi:toggle', async () => {
     return privilegedOp('wifi-toggle')
+  })
+
+  ipcMain.handle('wifi:saved', async () => {
+    try {
+      const out = await run('nmcli -t -f NAME,TYPE,ACTIVE connection show')
+      return out.split('\n')
+        .filter(l => l.includes(':802-11-wireless:') || l.includes(':wifi:'))
+        .map(l => {
+          const [name, type, active] = l.split(':')
+          return { name, active: active === 'yes' }
+        })
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle('wifi:forget', async (_, ssid: string) => {
+    try {
+      await run(`nmcli connection delete "${ssid}"`)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('wifi:macRandomization', async () => {
+    try {
+      const enabled = await run('nmcli -g 802-11-wireless.cloned-mac-address connection show 2>/dev/null || echo "default"').catch(() => 'default')
+      return { enabled: enabled.includes('random') || enabled.includes('stable') }
+    } catch {
+      return { enabled: false }
+    }
+  })
+
+  ipcMain.handle('wifi:setMacRandomization', async (_, enabled: boolean) => {
+    try {
+      // Get all WiFi connections
+      const conns = await run('nmcli -t -f NAME,TYPE connection show')
+        .then(o => o.split('\n').filter(l => l.includes(':802-11-wireless:') || l.includes(':wifi:')))
+        .then(lines => lines.map(l => l.split(':')[0]))
+
+      // Set randomization for all WiFi connections
+      const mode = enabled ? 'stable' : 'default'
+      for (const conn of conns) {
+        await run(`nmcli connection modify "${conn}" 802-11-wireless.cloned-mac-address ${mode}`).catch(() => {})
+      }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
   })
 
   // ── Bluetooth ──────────────────────────────────────────────────────────────
@@ -1386,6 +1491,125 @@ export async function registerIpcHandlers(): Promise<void> {
     if (!['start', 'stop'].includes(action)) throw new Error('Invalid action')
     const service = await run('systemctl list-unit-files | grep -E "^(ssh|sshd)\\.service" | head -1 | cut -d" " -f1').catch(() => 'ssh.service')
     return privilegedOp('service-action', action, service.trim() || 'ssh.service')
+  })
+
+  // ── Storage ────────────────────────────────────────────────────────────────
+  ipcMain.handle('storage:status', async () => {
+    // Partitions via df
+    const dfOut = await run("df -B1 --output=source,fstype,size,used,avail,pcent,target -x tmpfs -x devtmpfs -x squashfs -x overlay").catch(() => '')
+    type Partition = { source: string; fstype: string; size: number; used: number; avail: number; pct: number; mount: string }
+    const partitions: Partition[] = []
+    for (const line of dfOut.split('\n').slice(1)) {
+      const p = line.trim().split(/\s+/)
+      if (p.length < 7) continue
+      const source = p[0], fstype = p[1], size = parseInt(p[2]) || 0
+      const used = parseInt(p[3]) || 0, avail = parseInt(p[4]) || 0
+      const pct = parseInt(p[5]) || 0, mount = p[6]
+      if (size === 0 || source.startsWith('none')) continue
+      partitions.push({ source, fstype, size, used, avail, pct, mount })
+    }
+
+    // Block devices via lsblk
+    type BlockDev = { name: string; size: string; type: string; vendor: string; model: string; mountpoint: string }
+    const lsblkOut = await run('lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,VENDOR,MODEL -J').catch(() => '')
+    let blockDevices: BlockDev[] = []
+    try {
+      const parsed = JSON.parse(lsblkOut)
+      const flatten = (nodes: { name: string; size: string; type: string; mountpoint: string; vendor?: string; model?: string; children?: unknown[] }[]): BlockDev[] =>
+        nodes.flatMap(n => [
+          { name: n.name, size: n.size, type: n.type, mountpoint: n.mountpoint || '', vendor: (n.vendor || '').trim(), model: (n.model || '').trim() },
+          ...(n.children ? flatten(n.children as typeof nodes) : [])
+        ])
+      blockDevices = flatten(parsed.blockdevices || []).filter((d: BlockDev) => d.type === 'disk')
+    } catch { /* lsblk may not support -J */ }
+
+    // SMART health (best-effort, no privilege escalation)
+    type SmartHealth = { device: string; healthy: boolean | null; temperature: number | null }
+    const smartResults: SmartHealth[] = []
+    for (const dev of blockDevices) {
+      const out = await run(`smartctl -H /dev/${dev.name} 2>/dev/null`).catch(() => '')
+      if (!out) { smartResults.push({ device: dev.name, healthy: null, temperature: null }); continue }
+      const healthy = out.includes('PASSED') || out.includes('OK') ? true : out.includes('FAILED') ? false : null
+      const tempMatch = out.match(/Temperature[^:]*:\s*(\d+)/)
+      const temperature = tempMatch ? parseInt(tempMatch[1]) : null
+      smartResults.push({ device: dev.name, healthy, temperature })
+    }
+
+    return { partitions, blockDevices, smart: smartResults }
+  })
+
+  // ── System Overview ────────────────────────────────────────────────────────
+  ipcMain.handle('system:status', async () => {
+    // Hostname & OS
+    const hostname = await run('hostname').catch(() => 'unknown')
+    const osRelease = await readFile('/etc/os-release', 'utf8').catch(() => '')
+    const getOsVal = (key: string) => osRelease.match(new RegExp(`^${key}="?([^"\\n]+)"?`, 'm'))?.[1] ?? ''
+    const osName = getOsVal('PRETTY_NAME') || getOsVal('NAME')
+
+    // Kernel & arch
+    const kernel = await run('uname -r').catch(() => 'unknown')
+    const arch = await run('uname -m').catch(() => 'unknown')
+
+    // Uptime from /proc/uptime
+    const uptimeRaw = await readFile('/proc/uptime', 'utf8').catch(() => '0')
+    const uptimeSecs = parseFloat(uptimeRaw.split(' ')[0]) || 0
+    const uptimeDays = Math.floor(uptimeSecs / 86400)
+    const uptimeHrs = Math.floor((uptimeSecs % 86400) / 3600)
+    const uptimeMins = Math.floor((uptimeSecs % 3600) / 60)
+
+    // CPU info
+    const cpuInfo = await readFile('/proc/cpuinfo', 'utf8').catch(() => '')
+    const cpuModel = cpuInfo.match(/^model name\s*:\s*(.+)/m)?.[1]?.trim() ?? 'Unknown CPU'
+    const cpuCores = (cpuInfo.match(/^processor\s*:/gm) || []).length
+
+    // CPU usage (2 samples ~150ms apart)
+    async function getCpuTimes() {
+      const stat = await readFile('/proc/stat', 'utf8').catch(() => '')
+      const nums = stat.split('\n')[0].split(/\s+/).slice(1).map(Number)
+      const idle = nums[3] + (nums[4] || 0)
+      return { idle, total: nums.reduce((a, b) => a + b, 0) }
+    }
+    const t1 = await getCpuTimes()
+    await new Promise<void>(r => setTimeout(r, 150))
+    const t2 = await getCpuTimes()
+    const cpuUsage = Math.round((1 - (t2.idle - t1.idle) / (t2.total - t1.total)) * 100)
+
+    // Memory from /proc/meminfo
+    const memInfo = await readFile('/proc/meminfo', 'utf8').catch(() => '')
+    const memGet = (key: string) => parseInt(memInfo.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))?.[1] ?? '0') * 1024
+    const memTotal = memGet('MemTotal')
+    const memFree = memGet('MemFree')
+    const memBuffers = memGet('Buffers')
+    const memCached = memGet('Cached')
+    const memAvailable = memGet('MemAvailable')
+    const memUsed = memTotal - memFree - memBuffers - memCached
+    const swapTotal = memGet('SwapTotal')
+    const swapFree = memGet('SwapFree')
+
+    // Load averages
+    const loadAvg = await readFile('/proc/loadavg', 'utf8').catch(() => '0 0 0')
+    const [load1, load5, load15] = loadAvg.split(' ').map(parseFloat)
+
+    // Process count
+    const procCount = await run("ls /proc | grep -c '^[0-9]'").catch(() => '0')
+
+    return {
+      hostname: hostname.trim(),
+      osName,
+      kernel: kernel.trim(),
+      arch: arch.trim(),
+      uptime: { days: uptimeDays, hours: uptimeHrs, minutes: uptimeMins, totalSeconds: uptimeSecs },
+      cpu: { model: cpuModel, cores: cpuCores, usage: Math.max(0, Math.min(100, cpuUsage)) },
+      memory: {
+        total: memTotal,
+        used: Math.max(0, memUsed),
+        available: memAvailable,
+        swapTotal,
+        swapUsed: swapTotal - swapFree
+      },
+      load: { one: load1 || 0, five: load5 || 0, fifteen: load15 || 0 },
+      processes: parseInt(procCount.trim()) || 0
+    }
   })
 }
 

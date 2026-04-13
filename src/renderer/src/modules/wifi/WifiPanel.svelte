@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { Wifi, WifiOff, Lock, Unlock, RefreshCw, X, Check } from 'lucide-svelte'
+  import { Wifi, WifiOff, Lock, Unlock, RefreshCw, X, Check, Trash2, Bookmark, Shield } from 'lucide-svelte'
 
   type WifiStatus = { blocked: boolean; ssid: string | null; signal: number | null; security: string | null }
   type Network    = { ssid: string; signal: number; security: string; bssid: string; active: boolean }
+  type SavedNetwork = { name: string; active: boolean }
 
   let status    = $state<WifiStatus | null>(null)
   let networks  = $state<Network[]>([])
+  let saved     = $state<SavedNetwork[]>([])
+  let macRandomization = $state(false)
   let loading   = $state(true)
   let scanning  = $state(false)
   let toggling  = $state(false)
@@ -21,14 +24,26 @@
 
   async function loadStatus() {
     loading = true; error = ''
-    try { status = await invoke<WifiStatus>('wifi:status') }
+    try {
+      status = await invoke<WifiStatus>('wifi:status')
+      const macRandom = await invoke<{ enabled: boolean }>('wifi:macRandomization')
+      macRandomization = macRandom.enabled
+    }
     catch (e) { error = String(e) }
     finally { loading = false }
   }
 
+  async function loadSaved() {
+    try { saved = await invoke<SavedNetwork[]>('wifi:saved') }
+    catch (e) { console.error('Failed to load saved networks', e) }
+  }
+
   async function scan() {
     scanning = true
-    try { networks = await invoke<Network[]>('wifi:scan') }
+    try {
+      networks = await invoke<Network[]>('wifi:scan')
+      await loadSaved()
+    }
     catch (e) { error = String(e) }
     finally { scanning = false }
   }
@@ -62,6 +77,23 @@
   async function disconnect() {
     try { await invoke('wifi:disconnect'); await loadStatus(); await scan() }
     catch (e) { error = String(e) }
+  }
+
+  async function forget(name: string) {
+    if (!confirm(`Forget network "${name}"?`)) return
+    try {
+      const res = await invoke<{ ok: boolean; error?: string }>('wifi:forget', name)
+      if (!res.ok) throw new Error(res.error ?? 'Failed to forget network')
+      await loadSaved()
+      await scan()
+    } catch (e) { error = String(e) }
+  }
+
+  async function toggleMacRandomization() {
+    try {
+      await invoke('wifi:setMacRandomization', !macRandomization)
+      macRandomization = !macRandomization
+    } catch (e) { error = String(e) }
   }
 
   onMount(async () => { await loadStatus(); await scan() })
@@ -169,6 +201,56 @@
     {/if}
   </div>
   {/if}
+
+  <!-- Saved Networks -->
+  {#if saved.length > 0}
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
+        <p class="text-sm font-medium flex items-center gap-2">
+          <Bookmark size={14} class="text-muted-foreground" />
+          Saved networks ({saved.length})
+        </p>
+      </div>
+      <div class="divide-y divide-border max-h-40 overflow-y-auto">
+        {#each saved as net}
+          <div class="flex items-center justify-between px-4 py-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm text-muted-foreground truncate">{net.name}</span>
+              {#if net.active}
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">Connected</span>
+              {/if}
+            </div>
+            <button
+              onclick={() => forget(net.name)}
+              class="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
+              title="Forget network"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- MAC Randomization -->
+  <div class="rounded-xl border border-border bg-card p-4">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <Shield size={15} class="text-muted-foreground" />
+        <div>
+          <p class="text-sm font-medium">MAC address randomization</p>
+          <p class="text-xs text-muted-foreground">Use random MAC for privacy</p>
+        </div>
+      </div>
+      <button
+        onclick={toggleMacRandomization}
+        class="relative w-11 h-6 rounded-full transition-colors {macRandomization ? 'bg-primary' : 'bg-secondary border border-border'}"
+      >
+        <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {macRandomization ? 'translate-x-5' : ''}"></span>
+      </button>
+    </div>
+  </div>
 
   <!-- Password dialog -->
   {#if pwdTarget}

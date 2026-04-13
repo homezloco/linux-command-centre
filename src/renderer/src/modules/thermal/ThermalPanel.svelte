@@ -2,7 +2,9 @@
   import { onMount, onDestroy } from 'svelte'
   import { subscribeStream } from '$stores/stream'
   import { tempColor } from '$lib/utils'
-  import { Wind, Cpu, Thermometer } from 'lucide-svelte'
+  import { Wind, Cpu, Thermometer, AlertTriangle, Activity } from 'lucide-svelte'
+
+  type ProcessInfo = { name: string; pid: number; cpu: number; mem: number }
 
   type ThermalSnapshot = {
     timestamp: number
@@ -11,6 +13,8 @@
     cpuMinMhz: number
     cpuMaxMhz: number
     turboEnabled: boolean
+    throttling: { throttled: boolean; type: string } | null
+    processes: ProcessInfo[]
   }
 
   let snapshot = $state<ThermalSnapshot | null>(null)
@@ -114,6 +118,47 @@
         <span class="absolute bottom-0 right-0 text-[10px] text-muted-foreground">{graphMin.toFixed(0)}°</span>
       </div>
     </div>
+    {/if}
+
+    <!-- Throttling Alert -->
+    {#if snapshot.throttling?.throttled}
+      <div class="rounded-xl border border-red-400/30 bg-red-400/10 p-4">
+        <div class="flex items-center gap-3">
+          <AlertTriangle size={20} class="text-red-400" />
+          <div>
+            <p class="text-sm font-medium text-red-400">Thermal Throttling Active</p>
+            <p class="text-xs text-red-400/80">{snapshot.throttling.type}</p>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Top Processes -->
+    {#if snapshot.processes.length > 0}
+      <div class="rounded-xl border border-border bg-card overflow-hidden">
+        <div class="px-4 py-3 border-b border-border">
+          <p class="text-sm font-medium flex items-center gap-2">
+            <Activity size={14} class="text-muted-foreground" />
+            Top Processes by CPU
+          </p>
+        </div>
+        <div class="divide-y divide-border">
+          {#each snapshot.processes as proc}
+            <div class="flex items-center justify-between px-4 py-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-[10px] text-muted-foreground font-mono">{proc.pid}</span>
+                <span class="text-sm text-muted-foreground truncate">{proc.name}</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="text-xs font-mono">{proc.cpu.toFixed(1)}%</span>
+                <div class="w-16 h-1.5 rounded-full bg-secondary overflow-hidden">
+                  <div class="h-full bg-primary rounded-full" style="width: {Math.min(proc.cpu, 100)}%"></div>
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
     {/if}
 
     <!-- All sensors table -->
