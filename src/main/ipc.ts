@@ -1284,24 +1284,35 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Security ───────────────────────────────────────────────────────────────
   async function getFirewallStatus() {
     try {
-      const ufwOut = await run('ufw status verbose').catch(() => '')
-      const lines = ufwOut.split('\n')
-      const statusLine = lines.find(l => l.toLowerCase().includes('status:'))
-      const active = statusLine?.toLowerCase().includes('active') ?? false
+      // Check if UFW is installed without needing root
+      const ufwBin = await run('which ufw 2>/dev/null || command -v ufw 2>/dev/null').catch(() => '')
+      const installed = ufwBin.trim().length > 0 || existsSync('/usr/sbin/ufw') || existsSync('/sbin/ufw')
+      if (!installed) return { installed: false, active: false, rules: 0, defaultIncoming: 'deny', defaultOutgoing: 'allow' }
 
-      const defaultLines = lines.filter(l => l.includes('Default:'))
-      const defaultIncoming = defaultLines.find(l => l.includes('incoming'))?.match(/Default:\s*(\w+)/)?.[1] ?? 'deny'
-      const defaultOutgoing = defaultLines.find(l => l.includes('outgoing'))?.match(/Default:\s*(\w+)/)?.[1] ?? 'allow'
+      // Read enabled state from config file — no root required
+      const ufwConf = await readFile('/etc/ufw/ufw.conf', 'utf8').catch(() => '')
+      const enabledInConf = /^ENABLED=yes/im.test(ufwConf)
 
-      const rules = lines.filter(l => l.includes('ALLOW') || l.includes('DENY') || l.includes('REJECT')).length
+      // Count rules from user rules file — no root required
+      const userRules = await readFile('/etc/ufw/user.rules', 'utf8').catch(() => '')
+      const rules = (userRules.match(/^-A ufw-user-(input|output|forward)/gm) || []).length
 
-      return {
-        installed: ufwOut.length > 0,
-        active,
-        rules,
-        defaultIncoming,
-        defaultOutgoing
+      // Try getting verbose status (works if user has sudo NOPASSWD or is root)
+      const ufwOut = await run('ufw status verbose 2>/dev/null').catch(() => '')
+      let active = enabledInConf
+      let defaultIncoming = 'deny'
+      let defaultOutgoing = 'allow'
+
+      if (ufwOut) {
+        const lines = ufwOut.split('\n')
+        const statusLine = lines.find(l => l.toLowerCase().startsWith('status:'))
+        if (statusLine) active = statusLine.toLowerCase().includes('active')
+        const defaultLines = lines.filter(l => l.includes('Default:'))
+        defaultIncoming = defaultLines.find(l => l.includes('incoming'))?.match(/Default:\s*(\w+)/)?.[1] ?? defaultIncoming
+        defaultOutgoing = defaultLines.find(l => l.includes('outgoing'))?.match(/Default:\s*(\w+)/)?.[1] ?? defaultOutgoing
       }
+
+      return { installed: true, active, rules, defaultIncoming, defaultOutgoing }
     } catch {
       return { installed: false, active: false, rules: 0, defaultIncoming: 'deny', defaultOutgoing: 'allow' }
     }
@@ -1377,24 +1388,29 @@ export async function registerIpcHandlers(): Promise<void> {
 
   async function getEncryptionStatus() {
     try {
-      const cryptOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT -J 2>/dev/null || lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT').catch(() => '')
+      const cryptOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT -J 2>/dev/null').catch(() => '')
       const devices: { name: string; type: string; encrypted: boolean }[] = []
 
-      // Try JSON first, fallback to text
       if (cryptOut.startsWith('{')) {
         const parsed = JSON.parse(cryptOut)
-        const checkBlock = (dev: any) => {
+        const checkBlock = (dev: { name: string; type: string; fstype?: string; children?: unknown[] }) => {
+          // Skip loop devices (snap mounts, AppImages, etc.)
+          if (dev.type === 'loop') return
           const isCrypt = dev.fstype === 'crypto_LUKS' || dev.type === 'crypt'
-          devices.push({ name: dev.name, type: dev.type, encrypted: isCrypt })
-          if (dev.children) dev.children.forEach(checkBlock)
+          if (dev.type !== 'loop') {
+            devices.push({ name: dev.name, type: dev.type, encrypted: isCrypt })
+          }
+          if (dev.children) (dev.children as typeof dev[]).forEach(checkBlock)
         }
         parsed.blockdevices?.forEach(checkBlock)
       } else {
-        // Text fallback - look for crypt entries
-        for (const line of cryptOut.split('\n')) {
+        // Fallback: text lsblk, skip loop lines
+        const textOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT').catch(() => '')
+        for (const line of textOut.split('\n')) {
+          if (!line.trim() || line.includes(' loop ')) continue
           if (line.includes('crypt') || line.includes('LUKS')) {
             const parts = line.trim().split(/\s+/)
-            devices.push({ name: parts[0], type: parts[1], encrypted: true })
+            devices.push({ name: parts[0].replace(/[└├─]/g, ''), type: parts[1], encrypted: true })
           }
         }
       }
@@ -1880,6 +1896,59 @@ export async function registerIpcHandlers(): Promise<void> {
     if (opts.delay    !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'delay',           `uint32 ${opts.delay}`)
     if (opts.interval !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat-interval', `uint32 ${opts.interval}`)
     if (opts.repeat   !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat',          String(opts.repeat))
+    return { ok: true }
+  })
+
+  // ── Mouse ──────────────────────────────────────────────────────────────────
+  ipcMain.handle('mouse:status', async () => {
+    const gs = (schema: string, key: string) =>
+      run(`gsettings get ${schema} ${key}`).catch(() => '')
+
+    const speedRaw        = await gs('org.gnome.desktop.peripherals.mouse', 'speed')
+    const naturalRaw      = await gs('org.gnome.desktop.peripherals.mouse', 'natural-scroll')
+    const accelProfileRaw = await gs('org.gnome.desktop.peripherals.mouse', 'accel-profile')
+    const middleEmuRaw    = await gs('org.gnome.desktop.peripherals.mouse', 'middle-click-emulation')
+    const leftHandedRaw   = await gs('org.gnome.desktop.peripherals.mouse', 'left-handed')
+
+    // Physical pointer devices from xinput
+    type MouseDevice = { id: number; name: string }
+    const xinputOut = await run('xinput list').catch(() => '')
+    const devices: MouseDevice[] = []
+    for (const line of xinputOut.split('\n')) {
+      if (!line.includes('slave') && !line.includes('pointer')) continue
+      if (/keyboard|KEYBOARD|Virtual|Meta/i.test(line)) continue
+      const idMatch = line.match(/id=(\d+)/)
+      const nameMatch = line.match(/↳?\s+([^\t]+)\t/)
+      if (idMatch && nameMatch) {
+        devices.push({ id: parseInt(idMatch[1]), name: nameMatch[1].trim() })
+      }
+    }
+
+    // Parse accel profile: 'default' | 'flat' | 'adaptive'
+    const accelProfile = accelProfileRaw.trim().replace(/'/g, '') || 'default'
+
+    return {
+      speed:          parseFloat(speedRaw) || 0,
+      naturalScroll:  naturalRaw.trim() === 'true',
+      accelProfile,
+      middleEmulation: middleEmuRaw.trim() === 'true',
+      leftHanded:     leftHandedRaw.trim() === 'true',
+      devices,
+    }
+  })
+
+  ipcMain.handle('mouse:set', async (_, opts: {
+    speed?: number; naturalScroll?: boolean; accelProfile?: string
+    middleEmulation?: boolean; leftHanded?: boolean
+  }) => {
+    const gs = (schema: string, key: string, val: string) =>
+      run(`gsettings set ${schema} ${key} ${val}`)
+    const s = 'org.gnome.desktop.peripherals.mouse'
+    if (opts.speed          !== undefined) await gs(s, 'speed',                  opts.speed.toFixed(4))
+    if (opts.naturalScroll  !== undefined) await gs(s, 'natural-scroll',          String(opts.naturalScroll))
+    if (opts.accelProfile   !== undefined) await gs(s, 'accel-profile',           `'${opts.accelProfile}'`)
+    if (opts.middleEmulation !== undefined) await gs(s, 'middle-click-emulation', String(opts.middleEmulation))
+    if (opts.leftHanded     !== undefined) await gs(s, 'left-handed',             String(opts.leftHanded))
     return { ok: true }
   })
 

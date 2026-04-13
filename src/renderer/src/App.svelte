@@ -3,7 +3,7 @@
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
            Zap, Mouse, RefreshCw, LayoutGrid, Shield, Keyboard,
            HardDrive, Server, Network, Activity, Usb, ScrollText,
-           Lock, Clock } from 'lucide-svelte'
+           Lock, Clock, MousePointer } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -24,6 +24,8 @@
   import VpnPanel        from './modules/vpn/VpnPanel.svelte'
   import KeyboardPanel   from './modules/keyboard/KeyboardPanel.svelte'
   import DateTimePanel   from './modules/datetime/DateTimePanel.svelte'
+  import MousePanel      from './modules/mouse/MousePanel.svelte'
+  import CommandPalette  from '$lib/CommandPalette.svelte'
   import { invoke }      from '$lib/utils'
 
   type Mod = { id: string; label: string; icon: typeof Battery; component: typeof BatteryPanel }
@@ -49,14 +51,15 @@
     {
       label: 'Hardware',
       items: [
-        { id: 'battery',   label: 'Battery',   icon: Battery,     component: BatteryPanel },
-        { id: 'thermal',   label: 'Thermal',   icon: Thermometer, component: ThermalPanel },
-        { id: 'display',   label: 'Display',   icon: Monitor,     component: DisplayPanel },
-        { id: 'audio',     label: 'Audio',     icon: Volume2,     component: AudioPanel },
-        { id: 'touchpad',  label: 'Touchpad',  icon: Mouse,       component: TouchpadPanel },
-        { id: 'keyboard',  label: 'Keyboard',  icon: Keyboard,    component: KeyboardPanel },
-        { id: 'usb',       label: 'USB',       icon: Usb,         component: UsbPanel },
-        { id: 'storage',   label: 'Storage',   icon: HardDrive,   component: StoragePanel },
+        { id: 'battery',   label: 'Battery',   icon: Battery,       component: BatteryPanel },
+        { id: 'thermal',   label: 'Thermal',   icon: Thermometer,   component: ThermalPanel },
+        { id: 'display',   label: 'Display',   icon: Monitor,       component: DisplayPanel },
+        { id: 'audio',     label: 'Audio',     icon: Volume2,       component: AudioPanel },
+        { id: 'mouse',     label: 'Mouse',     icon: MousePointer,  component: MousePanel },
+        { id: 'touchpad',  label: 'Touchpad',  icon: Mouse,         component: TouchpadPanel },
+        { id: 'keyboard',  label: 'Keyboard',  icon: Keyboard,      component: KeyboardPanel },
+        { id: 'usb',       label: 'USB',       icon: Usb,           component: UsbPanel },
+        { id: 'storage',   label: 'Storage',   icon: HardDrive,     component: StoragePanel },
       ]
     },
     {
@@ -77,8 +80,9 @@
     },
   ]
 
-  // Flat list for lookup
+  // Flat list for lookup + palette items
   const allMods = groups.flatMap(g => g.items)
+  const paletteItems = groups.flatMap(g => g.items.map(m => ({ ...m, group: g.label })))
 
   let active  = $state('system')
   const current = $derived(allMods.find(m => m.id === active)!)
@@ -120,6 +124,8 @@
   })
   onDestroy(() => clearInterval(badgeInterval))
 </script>
+
+<CommandPalette items={paletteItems} onselect={(id) => active = id} />
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
   <!-- Sidebar -->
@@ -170,7 +176,8 @@
   <!-- Main panel -->
   <main class="flex-1 overflow-y-auto bg-background">
     <div class="drag-region h-10 border-b border-border flex items-center px-5 shrink-0">
-      <span class="text-sm font-medium no-drag">{current.label}</span>
+      <span class="text-sm font-medium no-drag flex-1">{current.label}</span>
+      <kbd class="no-drag text-[10px] text-muted-foreground/40 border border-border/50 rounded px-1.5 py-0.5 font-mono">Ctrl K</kbd>
     </div>
     <div class="p-5">
       {#key active}
