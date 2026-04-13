@@ -4,10 +4,7 @@
   import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers } from 'lucide-svelte'
 
   type SystemStatus = {
-    hostname: string
-    osName: string
-    kernel: string
-    arch: string
+    hostname: string; osName: string; kernel: string; arch: string
     uptime: { days: number; hours: number; minutes: number; totalSeconds: number }
     cpu: { model: string; cores: number; usage: number }
     memory: { total: number; used: number; available: number; swapTotal: number; swapUsed: number }
@@ -15,11 +12,18 @@
     processes: number
   }
 
-  let status = $state<SystemStatus | null>(null)
-  let loading = $state(true)
+  const HISTORY_MAX = 60   // 5 minutes at 5s interval
+  const SPARK_W    = 240
+  const SPARK_H    = 40
+
+  let status   = $state<SystemStatus | null>(null)
+  let loading  = $state(true)
   let refreshing = $state(false)
-  let error = $state('')
+  let error    = $state('')
   let interval: ReturnType<typeof setInterval> | undefined
+
+  // rolling history: {cpu, mem} percentages
+  let history = $state<{ cpu: number; mem: number }[]>([])
 
   async function load(force = false) {
     if (force) refreshing = true
@@ -27,8 +31,45 @@
     error = ''
     try {
       status = await invoke<SystemStatus>('system:status')
+      if (status) {
+        const memPct = Math.round(status.memory.used / status.memory.total * 100)
+        history = [...history, { cpu: status.cpu.usage, mem: memPct }].slice(-HISTORY_MAX)
+      }
     } catch (e) { error = String(e) }
     finally { loading = false; refreshing = false }
+  }
+
+  // Build SVG polyline points from a data series (0-100)
+  function sparkPoints(data: number[]): string {
+    if (data.length < 2) return ''
+    return data.map((v, i) => {
+      const x = (i / (data.length - 1)) * SPARK_W
+      const y = SPARK_H - (Math.max(0, Math.min(100, v)) / 100) * SPARK_H
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    }).join(' ')
+  }
+
+  // Build closed SVG path for the filled area under the sparkline
+  function sparkArea(data: number[]): string {
+    if (data.length < 2) return ''
+    const pts = data.map((v, i) => {
+      const x = (i / (data.length - 1)) * SPARK_W
+      const y = SPARK_H - (Math.max(0, Math.min(100, v)) / 100) * SPARK_H
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    return `M0,${SPARK_H} L${pts.join(' L')} L${SPARK_W},${SPARK_H} Z`
+  }
+
+  function usageColor(pct: number): string {
+    if (pct >= 90) return 'bg-red-500'
+    if (pct >= 70) return 'bg-yellow-500'
+    return 'bg-primary'
+  }
+
+  function sparkColor(pct: number): string {
+    if (pct >= 90) return '#ef4444'
+    if (pct >= 70) return '#eab308'
+    return 'hsl(var(--primary))'
   }
 
   function fmt(bytes: number): string {
@@ -38,38 +79,31 @@
     return (bytes / 1e3).toFixed(0) + ' KB'
   }
 
-  function usageColor(pct: number): string {
-    if (pct >= 90) return 'bg-red-500'
-    if (pct >= 70) return 'bg-yellow-500'
-    return 'bg-primary'
-  }
-
   function uptimeStr(u: SystemStatus['uptime']): string {
     const parts: string[] = []
-    if (u.days > 0) parts.push(`${u.days}d`)
+    if (u.days > 0)  parts.push(`${u.days}d`)
     if (u.hours > 0) parts.push(`${u.hours}h`)
     parts.push(`${u.minutes}m`)
     return parts.join(' ')
   }
 
-  onMount(() => {
-    load()
-    interval = setInterval(() => load(true), 5000)
-  })
+  onMount(() => { load(); interval = setInterval(() => load(true), 5000) })
   onDestroy(() => clearInterval(interval))
 </script>
 
-<!-- Loading -->
 {#if loading}
   <div class="flex items-center justify-center h-40">
     <RefreshCw size={20} class="animate-spin text-muted-foreground" />
   </div>
 
-<!-- Error -->
 {:else if error}
   <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
 
 {:else if status}
+  {@const memPct = Math.round(status.memory.used / status.memory.total * 100)}
+  {@const cpuHistory = history.map(h => h.cpu)}
+  {@const memHistory = history.map(h => h.mem)}
+
   <div class="space-y-4 max-w-2xl">
 
     <!-- Header -->
@@ -93,24 +127,21 @@
     <div class="grid grid-cols-3 gap-3">
       <div class="rounded-xl border border-border bg-card p-3 space-y-1">
         <div class="flex items-center gap-2 text-muted-foreground">
-          <Layers size={13} />
-          <span class="text-xs">Kernel</span>
+          <Layers size={13} /><span class="text-xs">Kernel</span>
         </div>
         <p class="text-sm font-medium truncate">{status.kernel}</p>
         <p class="text-xs text-muted-foreground">{status.arch}</p>
       </div>
       <div class="rounded-xl border border-border bg-card p-3 space-y-1">
         <div class="flex items-center gap-2 text-muted-foreground">
-          <Clock size={13} />
-          <span class="text-xs">Uptime</span>
+          <Clock size={13} /><span class="text-xs">Uptime</span>
         </div>
         <p class="text-sm font-medium">{uptimeStr(status.uptime)}</p>
         <p class="text-xs text-muted-foreground">&nbsp;</p>
       </div>
       <div class="rounded-xl border border-border bg-card p-3 space-y-1">
         <div class="flex items-center gap-2 text-muted-foreground">
-          <Activity size={13} />
-          <span class="text-xs">Processes</span>
+          <Activity size={13} /><span class="text-xs">Processes</span>
         </div>
         <p class="text-sm font-medium">{status.processes}</p>
         <p class="text-xs text-muted-foreground">running</p>
@@ -131,13 +162,35 @@
         </div>
         <span class="text-2xl font-semibold tabular-nums">{status.cpu.usage}%</span>
       </div>
-      <div class="h-2 rounded-full bg-secondary overflow-hidden">
-        <div
-          class="h-full rounded-full transition-all duration-500 {usageColor(status.cpu.usage)}"
-          style="width: {status.cpu.usage}%"
-        ></div>
-      </div>
-      <!-- Load averages -->
+
+      <!-- Sparkline -->
+      {#if cpuHistory.length >= 2}
+        <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
+          <svg
+            viewBox="0 0 {SPARK_W} {SPARK_H}"
+            preserveAspectRatio="none"
+            class="absolute inset-0 w-full h-full"
+          >
+            <path d={sparkArea(cpuHistory)} fill={sparkColor(status.cpu.usage)} opacity="0.15" />
+            <polyline
+              points={sparkPoints(cpuHistory)}
+              fill="none"
+              stroke={sparkColor(status.cpu.usage)}
+              stroke-width="1.5"
+              stroke-linejoin="round"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span class="absolute bottom-1 right-2 text-[9px] text-muted-foreground/60">5 min</span>
+        </div>
+      {:else}
+        <!-- Progress bar before history builds up -->
+        <div class="h-2 rounded-full bg-secondary overflow-hidden">
+          <div class="h-full rounded-full transition-all duration-500 {usageColor(status.cpu.usage)}"
+               style="width: {status.cpu.usage}%"></div>
+        </div>
+      {/if}
+
       <div class="flex gap-4 text-xs text-muted-foreground">
         <span>Load 1m: <span class="text-foreground font-medium">{status.load.one.toFixed(2)}</span></span>
         <span>5m: <span class="text-foreground font-medium">{status.load.five.toFixed(2)}</span></span>
@@ -157,16 +210,36 @@
             <p class="text-xs text-muted-foreground">{fmt(status.memory.used)} used of {fmt(status.memory.total)}</p>
           </div>
         </div>
-        <span class="text-2xl font-semibold tabular-nums">
-          {Math.round(status.memory.used / status.memory.total * 100)}%
-        </span>
+        <span class="text-2xl font-semibold tabular-nums">{memPct}%</span>
       </div>
-      <div class="h-2 rounded-full bg-secondary overflow-hidden">
-        <div
-          class="h-full rounded-full transition-all duration-500 {usageColor(Math.round(status.memory.used / status.memory.total * 100))}"
-          style="width: {Math.round(status.memory.used / status.memory.total * 100)}%"
-        ></div>
-      </div>
+
+      <!-- Sparkline -->
+      {#if memHistory.length >= 2}
+        <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
+          <svg
+            viewBox="0 0 {SPARK_W} {SPARK_H}"
+            preserveAspectRatio="none"
+            class="absolute inset-0 w-full h-full"
+          >
+            <path d={sparkArea(memHistory)} fill={sparkColor(memPct)} opacity="0.15" />
+            <polyline
+              points={sparkPoints(memHistory)}
+              fill="none"
+              stroke={sparkColor(memPct)}
+              stroke-width="1.5"
+              stroke-linejoin="round"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span class="absolute bottom-1 right-2 text-[9px] text-muted-foreground/60">5 min</span>
+        </div>
+      {:else}
+        <div class="h-2 rounded-full bg-secondary overflow-hidden">
+          <div class="h-full rounded-full transition-all duration-500 {usageColor(memPct)}"
+               style="width: {memPct}%"></div>
+        </div>
+      {/if}
+
       <div class="flex justify-between text-xs text-muted-foreground">
         <span>{fmt(status.memory.used)} used</span>
         <span>{fmt(status.memory.available)} available</span>
@@ -190,10 +263,8 @@
           <span class="text-2xl font-semibold tabular-nums">{swapPct}%</span>
         </div>
         <div class="h-2 rounded-full bg-secondary overflow-hidden">
-          <div
-            class="h-full rounded-full transition-all duration-500 {usageColor(swapPct)}"
-            style="width: {swapPct}%"
-          ></div>
+          <div class="h-full rounded-full transition-all duration-500 {usageColor(swapPct)}"
+               style="width: {swapPct}%"></div>
         </div>
       </div>
     {/if}
