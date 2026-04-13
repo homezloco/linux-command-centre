@@ -130,6 +130,14 @@ const ops = {
     console.log(`UFW ${action}d`)
   },
 
+  'kill-process'(pid, signal = 'TERM') {
+    const pidNum = parseInt(pid)
+    if (!Number.isInteger(pidNum) || pidNum <= 1) throw new Error('Invalid PID')
+    if (!['TERM', 'KILL'].includes(signal)) throw new Error('Invalid signal')
+    execFileSync('kill', [`-${signal}`, String(pidNum)])
+    console.log(`Sent ${signal} to PID ${pidNum}`)
+  },
+
   'apt-upgrade'(packagesStr) {
     if (!packagesStr || packagesStr.length === 0) throw new Error('No packages specified')
     const packages = packagesStr.split(',').filter(p => p.length > 0 && /^[a-zA-Z0-9._+-]+$/.test(p))

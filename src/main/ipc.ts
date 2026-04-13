@@ -1611,6 +1611,172 @@ export async function registerIpcHandlers(): Promise<void> {
       processes: parseInt(procCount.trim()) || 0
     }
   })
+
+  // ── Network ────────────────────────────────────────────────────────────────
+  ipcMain.handle('network:status', async () => {
+    // Interfaces from `ip -j addr`
+    type IpAddr = { addr_info: { family: string; local: string; prefixlen: number }[]; ifname: string; operstate: string; link_type: string; address?: string; stats64?: { rx: { bytes: number; packets: number; errors: number }; tx: { bytes: number; packets: number; errors: number } } }
+    const ipOut = await run('ip -j addr show').catch(() => '[]')
+    let ifaces: IpAddr[] = []
+    try { ifaces = JSON.parse(ipOut) } catch { /* ignore */ }
+
+    // Stats from /proc/net/dev
+    const devStats: Record<string, { rxBytes: number; txBytes: number; rxPackets: number; txPackets: number }> = {}
+    const procNet = await readFile('/proc/net/dev', 'utf8').catch(() => '')
+    for (const line of procNet.split('\n').slice(2)) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length < 10) continue
+      const name = parts[0].replace(':', '')
+      devStats[name] = {
+        rxBytes: parseInt(parts[1]) || 0, rxPackets: parseInt(parts[2]) || 0,
+        txBytes: parseInt(parts[9]) || 0, txPackets: parseInt(parts[10]) || 0
+      }
+    }
+
+    // Default gateway
+    const routeOut = await run('ip route show default').catch(() => '')
+    const gateway = routeOut.match(/default via ([\d.]+)/)?.[1] ?? null
+    const gatewayIface = routeOut.match(/dev (\S+)/)?.[1] ?? null
+
+    // DNS from resolvectl (systemd-resolved) or /etc/resolv.conf
+    let dnsServers: string[] = []
+    const resolvectl = await run('resolvectl status --no-pager 2>/dev/null').catch(() => '')
+    if (resolvectl) {
+      const dns = resolvectl.match(/DNS Servers?:\s+(.+)/g)
+      if (dns) dnsServers = dns.flatMap(l => l.replace(/DNS Servers?:\s+/, '').trim().split(/\s+/)).filter(Boolean)
+    }
+    if (dnsServers.length === 0) {
+      const resolv = await readFile('/etc/resolv.conf', 'utf8').catch(() => '')
+      dnsServers = [...resolv.matchAll(/^nameserver\s+(\S+)/gm)].map(m => m[1])
+    }
+
+    const interfaces = ifaces
+      .filter(i => i.ifname !== 'lo')
+      .map(i => {
+        const v4 = i.addr_info?.find(a => a.family === 'inet')
+        const v6 = i.addr_info?.find(a => a.family === 'inet6' && !a.local.startsWith('fe80'))
+        const stats = devStats[i.ifname]
+        return {
+          name: i.ifname,
+          state: i.operstate?.toLowerCase() ?? 'unknown',
+          type: i.link_type ?? 'ether',
+          mac: i.address ?? null,
+          ipv4: v4 ? `${v4.local}/${v4.prefixlen}` : null,
+          ipv6: v6 ? `${v6.local}/${v6.prefixlen}` : null,
+          isDefault: i.ifname === gatewayIface,
+          rx: stats?.rxBytes ?? 0,
+          tx: stats?.txBytes ?? 0,
+          rxPackets: stats?.rxPackets ?? 0,
+          txPackets: stats?.txPackets ?? 0,
+        }
+      })
+
+    return { interfaces, gateway, dnsServers: [...new Set(dnsServers)].slice(0, 4) }
+  })
+
+  // ── Processes ─────────────────────────────────────────────────────────────
+  ipcMain.handle('processes:list', async (_, sortBy: 'cpu' | 'mem' = 'cpu') => {
+    const col = sortBy === 'mem' ? '-%mem' : '-%cpu'
+    const psOut = await run(`ps aux --sort=${col} --no-headers`).catch(() => '')
+    type Proc = { pid: number; user: string; cpu: number; mem: number; vsz: number; rss: number; stat: string; command: string; name: string }
+    const procs: Proc[] = []
+    for (const line of psOut.split('\n').slice(0, 50)) {
+      const p = line.trim().split(/\s+/)
+      if (p.length < 11) continue
+      const command = p.slice(10).join(' ')
+      const name = command.replace(/^-/, '').split(/[\s/]/).pop()?.split('?')[0] || command.slice(0, 20)
+      procs.push({
+        pid: parseInt(p[1]) || 0,
+        user: p[0],
+        cpu: parseFloat(p[2]) || 0,
+        mem: parseFloat(p[3]) || 0,
+        vsz: parseInt(p[4]) || 0,
+        rss: parseInt(p[5]) * 1024 || 0,
+        stat: p[7],
+        command: command.slice(0, 80),
+        name: name.slice(0, 20)
+      })
+    }
+    return procs
+  })
+
+  ipcMain.handle('processes:kill', async (_, pid: number, signal: 'TERM' | 'KILL' = 'TERM') => {
+    if (!Number.isInteger(pid) || pid <= 1) throw new Error('Invalid PID')
+    if (!['TERM', 'KILL'].includes(signal)) throw new Error('Invalid signal')
+    try {
+      await run(`kill -${signal} ${pid}`)
+      return { ok: true }
+    } catch {
+      // Try privileged kill
+      return privilegedOp('kill-process', String(pid), signal).then(() => ({ ok: true }))
+    }
+  })
+
+  // ── Logs ───────────────────────────────────────────────────────────────────
+  ipcMain.handle('logs:query', async (_, opts: {
+    lines?: number; unit?: string; priority?: number; since?: string; grep?: string
+  } = {}) => {
+    const args = ['--output=json', '--no-pager', '--reverse']
+    args.push(`-n`, String(opts.lines ?? 200))
+    if (opts.unit)     args.push(`--unit=${opts.unit}`)
+    if (opts.priority !== undefined) args.push(`--priority=0..${opts.priority}`)
+    if (opts.since)    args.push(`--since=${opts.since}`)
+    if (opts.grep)     args.push(`--grep=${opts.grep}`)
+
+    const out = await run(`journalctl ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`).catch(() => '')
+
+    type JEntry = { pid: number | null; priority: number; unit: string; message: string; timestamp: number; identifier: string }
+    const entries: JEntry[] = []
+    for (const line of out.split('\n')) {
+      if (!line.startsWith('{')) continue
+      try {
+        const j = JSON.parse(line)
+        entries.push({
+          pid: j._PID ? parseInt(j._PID) : null,
+          priority: parseInt(j.PRIORITY ?? '6'),
+          unit: (j._SYSTEMD_UNIT || j.UNIT || j.SYSLOG_IDENTIFIER || 'kernel').replace('.service', ''),
+          message: Array.isArray(j.MESSAGE) ? Buffer.from(j.MESSAGE).toString('utf8') : String(j.MESSAGE ?? ''),
+          timestamp: Math.floor(parseInt(j.__REALTIME_TIMESTAMP ?? '0') / 1000),
+          identifier: j.SYSLOG_IDENTIFIER ?? ''
+        })
+      } catch { /* skip malformed */ }
+    }
+    return entries
+  })
+
+  ipcMain.handle('logs:units', async () => {
+    const out = await run("journalctl --field=_SYSTEMD_UNIT 2>/dev/null | sort -u | head -100").catch(() => '')
+    return out.split('\n').map(l => l.trim().replace('.service', '')).filter(Boolean).sort()
+  })
+
+  // ── USB ────────────────────────────────────────────────────────────────────
+  ipcMain.handle('usb:list', async () => {
+    const out = await run('lsusb').catch(() => '')
+    type UsbDevice = { bus: string; device: string; vendorId: string; productId: string; description: string; hub: boolean }
+    const devices: UsbDevice[] = []
+    for (const line of out.split('\n')) {
+      // Bus 001 Device 004: ID 046d:c548 Logitech, Inc. Logi Bolt Receiver
+      const m = line.match(/^Bus (\d+) Device (\d+): ID ([0-9a-f]{4}):([0-9a-f]{4})\s+(.*)$/i)
+      if (!m) continue
+      const description = m[5].trim()
+      devices.push({
+        bus: m[1], device: m[2],
+        vendorId: m[3], productId: m[4],
+        description: description || 'Unknown device',
+        hub: /hub/i.test(description)
+      })
+    }
+    return devices
+  })
+
+  // ── App Info ───────────────────────────────────────────────────────────────
+  ipcMain.handle('app:info', async () => {
+    const osRelease = await readFile('/etc/os-release', 'utf8').catch(() => '')
+    const getVal = (key: string) => osRelease.match(new RegExp(`^${key}="?([^"\\n]+)"?`, 'm'))?.[1] ?? ''
+    const osName = getVal('PRETTY_NAME') || getVal('NAME') || 'Linux'
+    const { app } = await import('electron')
+    return { version: app.getVersion(), osName }
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
