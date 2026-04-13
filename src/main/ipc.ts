@@ -1777,6 +1777,71 @@ export async function registerIpcHandlers(): Promise<void> {
     const { app } = await import('electron')
     return { version: app.getVersion(), osName }
   })
+
+  // ── VPN ────────────────────────────────────────────────────────────────────
+  ipcMain.handle('vpn:list', async () => {
+    const out = await run('nmcli -t -f NAME,TYPE,STATE,DEVICE connection show').catch(() => '')
+    type VpnConn = { name: string; type: string; active: boolean; device: string | null }
+    const connections: VpnConn[] = []
+    for (const line of out.split('\n')) {
+      // nmcli uses ':' as separator but colons can appear in names — split from right
+      const parts = line.split(':')
+      if (parts.length < 3) continue
+      const type = parts[1]
+      if (!['vpn', 'wireguard'].includes(type)) continue
+      connections.push({
+        name: parts[0],
+        type,
+        active: parts[2] === 'activated',
+        device: parts[3]?.trim() || null
+      })
+    }
+    return connections
+  })
+
+  ipcMain.handle('vpn:connect', async (_, name: string) => {
+    if (!name || name.length > 64) throw new Error('Invalid connection name')
+    try {
+      await run(`nmcli connection up ${JSON.stringify(name)}`)
+    } catch (e) {
+      // Fallback: privileged helper (some VPNs need root)
+      await privilegedOp('vpn-up', name)
+    }
+    return { ok: true }
+  })
+
+  ipcMain.handle('vpn:disconnect', async (_, name: string) => {
+    if (!name || name.length > 64) throw new Error('Invalid connection name')
+    await run(`nmcli connection down ${JSON.stringify(name)}`).catch(async () => {
+      await privilegedOp('vpn-down', name)
+    })
+    return { ok: true }
+  })
+
+  // ── Badge counts ───────────────────────────────────────────────────────────
+  ipcMain.handle('badge:counts', async () => {
+    // Pending updates (fast — cached by apt)
+    const aptOut = await run('apt list --upgradable 2>/dev/null').catch(() => '')
+    const upgradeLines = aptOut.split('\n').filter(l => l.includes('[upgradable'))
+    const securityUpdates = upgradeLines.filter(l => l.toLowerCase().includes('-security')).length
+    const pendingUpdates = upgradeLines.length
+
+    // High disk usage (any partition ≥ 85 %)
+    const dfOut = await run("df --output=pcent,target -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null").catch(() => '')
+    const highDisk = dfOut.split('\n').some(l => {
+      const m = l.trim().match(/^(\d+)%/)
+      return m && parseInt(m[1]) >= 85
+    })
+
+    // Active VPN
+    const vpnOut = await run("nmcli -t -f TYPE,STATE connection show 2>/dev/null").catch(() => '')
+    const vpnActive = vpnOut.split('\n').some(l => {
+      const [type, state] = l.split(':')
+      return ['vpn', 'wireguard'].includes(type) && state === 'activated'
+    })
+
+    return { pendingUpdates, securityUpdates, highDisk, vpnActive }
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

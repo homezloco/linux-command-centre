@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
-           Zap, Mouse, Camera, Moon, RefreshCw, Info, LayoutGrid, Shield,
-           HardDrive, Server, Network, Activity } from 'lucide-svelte'
+           Zap, Mouse, Moon, RefreshCw, LayoutGrid, Shield,
+           HardDrive, Server, Network, Activity, Usb, ScrollText } from 'lucide-svelte'
   import BatteryPanel from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel from './modules/wifi/WifiPanel.svelte'
@@ -17,6 +18,9 @@
   import SystemPanel from './modules/system/SystemPanel.svelte'
   import NetworkPanel from './modules/network/NetworkPanel.svelte'
   import ProcessesPanel from './modules/processes/ProcessesPanel.svelte'
+  import LogsPanel from './modules/logs/LogsPanel.svelte'
+  import UsbPanel from './modules/usb/UsbPanel.svelte'
+  import { invoke } from '$lib/utils'
 
   type Module = {
     id: string
@@ -38,13 +42,26 @@
     { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth,   component: BluetoothPanel },
     { id: 'touchpad',  label: 'Touchpad',  icon: Mouse,       component: TouchpadPanel },
     { id: 'storage',   label: 'Storage',   icon: HardDrive,   component: StoragePanel },
+    { id: 'usb',       label: 'USB',       icon: Usb,         component: UsbPanel },
     { id: 'security',  label: 'Security',  icon: Shield,      component: SecurityPanel },
     { id: 'startup',   label: 'Startup',   icon: LayoutGrid,  component: StartupPanel },
     { id: 'updates',   label: 'Updates',   icon: RefreshCw,   component: UpdatesPanel },
+    { id: 'logs',      label: 'Logs',      icon: ScrollText,  component: LogsPanel },
   ]
 
   let active = $state('system')
   const current = $derived(modules.find(m => m.id === active)!)
+
+  let appVersion = $state('0.1.0')
+  let appOs = $state('Linux')
+
+  onMount(async () => {
+    try {
+      const info = await invoke<{ version: string; osName: string }>('app:info')
+      appVersion = info.version
+      appOs = info.osName.replace(/\s+\d[\d.]*$/, '') // strip trailing version number
+    } catch { /* use defaults */ }
+  })
 </script>
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
@@ -74,7 +91,7 @@
 
     <div class="p-3 border-t border-border">
       <p class="text-[10px] text-muted-foreground">Linux Command Centre</p>
-      <p class="text-[10px] text-muted-foreground/50">v0.1.0 · Ubuntu 24.04</p>
+      <p class="text-[10px] text-muted-foreground/50">v{appVersion} · {appOs}</p>
     </div>
   </aside>
 

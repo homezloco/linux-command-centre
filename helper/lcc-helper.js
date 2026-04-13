@@ -124,6 +124,18 @@ const ops = {
     console.log(`systemctl ${action} ${service}`)
   },
 
+  'vpn-up'(name) {
+    if (!name || name.length > 64) throw new Error('Invalid connection name')
+    execFileSync('nmcli', ['connection', 'up', name], { stdio: 'inherit' })
+    console.log(`VPN up: ${name}`)
+  },
+
+  'vpn-down'(name) {
+    if (!name || name.length > 64) throw new Error('Invalid connection name')
+    execFileSync('nmcli', ['connection', 'down', name], { stdio: 'inherit' })
+    console.log(`VPN down: ${name}`)
+  },
+
   'firewall-action'(action) {
     if (!['enable', 'disable'].includes(action)) throw new Error('Action must be enable or disable')
     execFileSync('ufw', [action], { stdio: 'inherit' })
