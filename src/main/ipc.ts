@@ -2133,17 +2133,24 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('appearance:listWallpapers', async () => {
     const EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'])
-    const dirs = ['/usr/share/backgrounds', `${homedir()}/Pictures`]
+    const roots = ['/usr/share/backgrounds', `${homedir()}/Pictures`]
     const result: { path: string; name: string }[] = []
-    for (const dir of dirs) {
+
+    async function scanDir(dir: string, depth: number) {
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as import('fs').Dirent[])
       for (const e of entries) {
-        if (!e.isFile()) continue
-        const ext = e.name.slice(e.name.lastIndexOf('.')).toLowerCase()
-        if (EXTS.has(ext)) result.push({ path: `${dir}/${e.name}`, name: e.name.replace(/\.[^.]+$/, '') })
+        const full = `${dir}/${e.name}`
+        if ((e.isFile() || e.isSymbolicLink()) && e.name.includes('.')) {
+          const ext = e.name.slice(e.name.lastIndexOf('.')).toLowerCase()
+          if (EXTS.has(ext)) result.push({ path: full, name: e.name.replace(/\.[^.]+$/, '') })
+        } else if (e.isDirectory() && depth > 0 && !e.name.startsWith('.')) {
+          await scanDir(full, depth - 1)
+        }
       }
     }
-    return result
+
+    for (const root of roots) await scanDir(root, 2)
+    return result.sort((a, b) => a.name.localeCompare(b.name))
   })
 
   ipcMain.handle('appearance:set', async (_, opts: {
