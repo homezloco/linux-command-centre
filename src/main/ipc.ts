@@ -2565,24 +2565,25 @@ export async function registerIpcHandlers(): Promise<void> {
     const gs = (schema: string, key: string) =>
       run(`gsettings get ${schema} ${key} 2>/dev/null`).catch(() => 'false')
     const clean = (s: string) => s.trim()
-    const i   = 'org.gnome.desktop.interface'
-    const app = 'org.gnome.desktop.a11y.applications'
-    const kbd = 'org.gnome.desktop.a11y.keyboard'
-    const mou = 'org.gnome.desktop.a11y.mouse'
-    const snd = 'org.gnome.desktop.sound'
+    const a11y = 'org.gnome.desktop.a11y.interface'
+    const i    = 'org.gnome.desktop.interface'
+    const app  = 'org.gnome.desktop.a11y.applications'
+    const kbd  = 'org.gnome.desktop.a11y.keyboard'
+    const mou  = 'org.gnome.desktop.a11y.mouse'
+    const wm   = 'org.gnome.desktop.wm.preferences'
 
     const [highContrast, largeText,
            screenReader, magnifier,
            stickyKeys, slowKeys, bounceKeys, toggleKeys, mouseKeys,
            secondaryClick, dwellClick,
            visualBell] = await Promise.all([
-      gs(i,   'high-contrast'),         gs(i,   'text-scaling-factor'),
-      gs(app, 'screen-reader-enabled'), gs(app, 'screen-magnifier-enabled'),
-      gs(kbd, 'stickykeys-enable'),     gs(kbd, 'slowkeys-enable'),
-      gs(kbd, 'bouncekeys-enable'),     gs(kbd, 'togglekeys-enable'),
-      gs(kbd, 'mousekeys-enable'),
-      gs(mou, 'secondary-click-enabled'), gs(mou, 'dwell-click-enabled'),
-      gs(snd, 'visual-bell'),
+      gs(a11y, 'high-contrast'),        gs(i,   'text-scaling-factor'),
+      gs(app,  'screen-reader-enabled'), gs(app, 'screen-magnifier-enabled'),
+      gs(kbd,  'stickykeys-enable'),     gs(kbd, 'slowkeys-enable'),
+      gs(kbd,  'bouncekeys-enable'),     gs(kbd, 'togglekeys-enable'),
+      gs(kbd,  'mousekeys-enable'),
+      gs(mou,  'secondary-click-enabled'), gs(mou, 'dwell-click-enabled'),
+      gs(wm,   'visual-bell'),
     ])
 
     return {
@@ -2602,26 +2603,26 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('accessibility:set', async (_, opts: Record<string, boolean>) => {
-    const gs = (schema: string, key: string, val: string) =>
+    const gs  = (schema: string, key: string, val: string) =>
       run(`gsettings set ${schema} ${key} ${val}`)
-    const i   = 'org.gnome.desktop.interface'
-    const app = 'org.gnome.desktop.a11y.applications'
-    const kbd = 'org.gnome.desktop.a11y.keyboard'
-    const mou = 'org.gnome.desktop.a11y.mouse'
-    const snd = 'org.gnome.desktop.sound'
+    const a11y = 'org.gnome.desktop.a11y.interface'
+    const app  = 'org.gnome.desktop.a11y.applications'
+    const kbd  = 'org.gnome.desktop.a11y.keyboard'
+    const mou  = 'org.gnome.desktop.a11y.mouse'
+    const wm   = 'org.gnome.desktop.wm.preferences'
 
     const bv = (v: boolean) => v ? 'true' : 'false'
-    if (opts.highContrast     !== undefined) await gs(i,   'high-contrast',              bv(opts.highContrast))
-    if (opts.screenReader     !== undefined) await gs(app, 'screen-reader-enabled',       bv(opts.screenReader))
-    if (opts.magnifier        !== undefined) await gs(app, 'screen-magnifier-enabled',    bv(opts.magnifier))
-    if (opts.stickyKeys       !== undefined) await gs(kbd, 'stickykeys-enable',           bv(opts.stickyKeys))
-    if (opts.slowKeys         !== undefined) await gs(kbd, 'slowkeys-enable',             bv(opts.slowKeys))
-    if (opts.bounceKeys       !== undefined) await gs(kbd, 'bouncekeys-enable',           bv(opts.bounceKeys))
-    if (opts.toggleKeys       !== undefined) await gs(kbd, 'togglekeys-enable',           bv(opts.toggleKeys))
-    if (opts.mouseKeys        !== undefined) await gs(kbd, 'mousekeys-enable',            bv(opts.mouseKeys))
-    if (opts.secondaryClick   !== undefined) await gs(mou, 'secondary-click-enabled',     bv(opts.secondaryClick))
-    if (opts.dwellClick       !== undefined) await gs(mou, 'dwell-click-enabled',         bv(opts.dwellClick))
-    if (opts.visualBell       !== undefined) await gs(snd, 'visual-bell',                 bv(opts.visualBell))
+    if (opts.highContrast     !== undefined) await gs(a11y, 'high-contrast',              bv(opts.highContrast))
+    if (opts.screenReader     !== undefined) await gs(app,  'screen-reader-enabled',       bv(opts.screenReader))
+    if (opts.magnifier        !== undefined) await gs(app,  'screen-magnifier-enabled',    bv(opts.magnifier))
+    if (opts.stickyKeys       !== undefined) await gs(kbd,  'stickykeys-enable',           bv(opts.stickyKeys))
+    if (opts.slowKeys         !== undefined) await gs(kbd,  'slowkeys-enable',             bv(opts.slowKeys))
+    if (opts.bounceKeys       !== undefined) await gs(kbd,  'bouncekeys-enable',           bv(opts.bounceKeys))
+    if (opts.toggleKeys       !== undefined) await gs(kbd,  'togglekeys-enable',           bv(opts.toggleKeys))
+    if (opts.mouseKeys        !== undefined) await gs(kbd,  'mousekeys-enable',            bv(opts.mouseKeys))
+    if (opts.secondaryClick   !== undefined) await gs(mou,  'secondary-click-enabled',     bv(opts.secondaryClick))
+    if (opts.dwellClick       !== undefined) await gs(mou,  'dwell-click-enabled',         bv(opts.dwellClick))
+    if (opts.visualBell       !== undefined) await gs(wm,   'visual-bell',                 bv(opts.visualBell))
     return { ok: true }
   })
 
