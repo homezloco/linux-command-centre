@@ -1195,35 +1195,31 @@ export async function registerIpcHandlers(): Promise<void> {
 
   // ── GRUB ──────────────────────────────────────────────────────────────────
   ipcMain.handle('grub:status', async () => {
-    try {
-      const content = await readFile('/etc/default/grub', 'utf8')
-      const getVal = (key: string) => {
-        const m = content.match(new RegExp(`^\\s*${key}=(.*)`, 'm'))
-        return m ? m[1].trim().replace(/^["']|["']$/g, '') : ''
-      }
-      return {
-        timeout: parseInt(getVal('GRUB_TIMEOUT') || '10'),
-        defaultEntry: getVal('GRUB_DEFAULT') || '0',
-        cmdline: getVal('GRUB_CMDLINE_LINUX_DEFAULT'),
-        timeoutStyle: getVal('GRUB_TIMEOUT_STYLE') || 'menu',
-      }
-    } catch {
-      return { timeout: 10, defaultEntry: '0', cmdline: 'quiet splash', timeoutStyle: 'menu' }
+    const content = await readFile('/etc/default/grub', 'utf8').catch(() => '')
+    const get = (key: string) => {
+      const m = content.match(new RegExp(`^\\s*${key}=(.*)`, 'm'))
+      return m ? m[1].trim().replace(/^["']|["']$/g, '') : ''
+    }
+    const grubCfg = await readFile('/boot/grub/grub.cfg', 'utf8').catch(() => '')
+    const entries: string[] = []
+    for (const m of grubCfg.matchAll(/^menuentry\s+['"]([^'"]+)['"]/gm)) entries.push(m[1])
+    return {
+      timeout:        get('GRUB_TIMEOUT') || '5',
+      default:        get('GRUB_DEFAULT') || '0',
+      cmdlineDefault: get('GRUB_CMDLINE_LINUX_DEFAULT'),
+      timeoutStyle:   get('GRUB_TIMEOUT_STYLE') || 'menu',
+      entries,
     }
   })
 
-  ipcMain.handle('grub:entries', async () => {
-    try {
-      const content = await readFile('/boot/grub/grub.cfg', 'utf8')
-      return [...content.matchAll(/^\s*menuentry\s+['"]([^'"]+)['"]/gm)].map(m => m[1])
-    } catch {
-      return []
-    }
-  })
-
-  ipcMain.handle('grub:set', async (_, options: Record<string, string>) => {
+  ipcMain.handle('grub:set', async (_, opts: Record<string, string>) => {
+    const allowed = ['GRUB_TIMEOUT', 'GRUB_DEFAULT', 'GRUB_CMDLINE_LINUX_DEFAULT', 'GRUB_TIMEOUT_STYLE']
     const pairs: string[] = []
-    for (const [k, v] of Object.entries(options)) pairs.push(k, v)
+    for (const [k, v] of Object.entries(opts)) {
+      if (!allowed.includes(k)) throw new Error(`Disallowed GRUB key: ${k}`)
+      pairs.push(k, String(v))
+    }
+    if (pairs.length === 0) throw new Error('No changes to apply')
     return privilegedOp('grub-set', ...pairs)
   })
 
@@ -2785,37 +2781,6 @@ export async function registerIpcHandlers(): Promise<void> {
     const raw = await privilegedOp('smart-info', device)
     try { return JSON.parse(raw) }
     catch { throw new Error('Failed to parse SMART output') }
-  })
-
-  // ── GRUB Boot Manager ───────────────────────────────────────────────────────
-  ipcMain.handle('grub:status', async () => {
-    const content = await readFile('/etc/default/grub', 'utf8').catch(() => '')
-    const get = (key: string) => {
-      const m = content.match(new RegExp(`^\\s*${key}=(.*)`, 'm'))
-      if (!m) return ''
-      return m[1].trim().replace(/^["']|["']$/g, '')
-    }
-    const grubCfg = await readFile('/boot/grub/grub.cfg', 'utf8').catch(() => '')
-    const entries: string[] = []
-    for (const m of grubCfg.matchAll(/^menuentry\s+['"]([^'"]+)['"]/gm)) entries.push(m[1])
-    return {
-      timeout:        get('GRUB_TIMEOUT') || '5',
-      default:        get('GRUB_DEFAULT') || '0',
-      cmdlineDefault: get('GRUB_CMDLINE_LINUX_DEFAULT'),
-      timeoutStyle:   get('GRUB_TIMEOUT_STYLE') || 'menu',
-      entries,
-    }
-  })
-
-  ipcMain.handle('grub:set', async (_, opts: Record<string, string>) => {
-    const allowed = ['GRUB_TIMEOUT', 'GRUB_DEFAULT', 'GRUB_CMDLINE_LINUX_DEFAULT', 'GRUB_TIMEOUT_STYLE']
-    const pairs: string[] = []
-    for (const [k, v] of Object.entries(opts)) {
-      if (!allowed.includes(k)) throw new Error(`Disallowed GRUB key: ${k}`)
-      pairs.push(k, String(v))
-    }
-    if (pairs.length === 0) throw new Error('No changes to apply')
-    return privilegedOp('grub-set', ...pairs)
   })
 
   // ── Systemd Timers ──────────────────────────────────────────────────────────
