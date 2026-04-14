@@ -1,4 +1,4 @@
-import { ipcMain, net } from 'electron'
+import { ipcMain, net, app, clipboard } from 'electron'
 import { exec } from 'child_process'
 import { sysread, sysexists, run } from './shell'
 import { privilegedOp } from './privilege'
@@ -1166,16 +1166,23 @@ export async function registerIpcHandlers(): Promise<void> {
     await mkdir(userDir, { recursive: true })
     const filePath = `${userDir}/${APP_ID}.desktop`
 
-    // Try to detect how the app was launched
-    const execPath = process.env.APPIMAGE || process.execPath
-    const isAppImage = !!process.env.APPIMAGE
+    // Build correct Exec line for dev vs packaged vs AppImage
+    let execCmd: string
+    if (process.env.APPIMAGE) {
+      execCmd = `${process.env.APPIMAGE} --no-sandbox`
+    } else if (app.isPackaged) {
+      execCmd = process.execPath
+    } else {
+      // Dev: electron binary + app path
+      execCmd = `${process.execPath} ${app.getAppPath()}`
+    }
 
     const content = [
       '[Desktop Entry]',
       'Type=Application',
       'Name=Linux Command Centre',
       'Comment=Hardware management dashboard',
-      `Exec=${execPath}${isAppImage ? ' --no-sandbox' : ''}`,
+      `Exec=${execCmd}`,
       enabled ? 'X-GNOME-Autostart-enabled=true' : 'X-GNOME-Autostart-enabled=false',
       enabled ? '' : 'Hidden=true',
       'Icon=utilities-terminal',
@@ -1274,11 +1281,85 @@ export async function registerIpcHandlers(): Promise<void> {
 
   // ── Camera ─────────────────────────────────────────────────────────────────
   ipcMain.handle('camera:status', async () => {
-    const ipu6Loaded = (await run('lsmod').catch(() => '')).includes('intel_ipu6')
-    const halInstalled = existsSync('/usr/lib/libcamhal/plugins/ipu6epmtl.so')
-    const int3472Error = (await run('dmesg').catch(() => '')).includes('INT3472') &&
-      (await run('dmesg').catch(() => '')).includes('EBUSY')
-    return { ipu6Loaded, halInstalled, int3472Error }
+    const v4l2Present = !!(await run('which v4l2-ctl 2>/dev/null').catch(() => '')).trim()
+
+    // Parse device groups from v4l2-ctl --list-devices
+    type CameraGroup = { name: string; bus: string; nodes: string[] }
+    const groups: CameraGroup[] = []
+    if (v4l2Present) {
+      const devOut = await run('v4l2-ctl --list-devices 2>/dev/null').catch(() => '')
+      let current: CameraGroup | null = null
+      for (const line of devOut.split('\n')) {
+        if (!line.startsWith('\t') && line.trim()) {
+          const m = line.match(/^(.+?)\s*\((.+?)\):?\s*$/)
+          current = { name: m?.[1]?.trim() || line.trim(), bus: m?.[2]?.trim() || '', nodes: [] }
+          groups.push(current)
+        } else if (line.trim().startsWith('/dev/') && current) {
+          current.nodes.push(line.trim())
+        }
+      }
+    }
+
+    // For each group, get info on the first capture-capable node
+    const cameras = []
+    for (const grp of groups) {
+      for (const node of grp.nodes) {
+        const info = await run(`v4l2-ctl -d ${node} --info 2>/dev/null`).catch(() => '')
+        // Only include nodes with Video Capture + user-facing (not raw pipeline nodes)
+        if (!info.includes('Video Capture')) continue
+        // Skip internal pipeline nodes (ipu6 isys driver nodes expose many but are not user-facing)
+        const driver = info.match(/Driver name\s*:\s*(.+)/)?.[1]?.trim() || ''
+        if (driver === 'isys') continue
+
+        // Formats
+        const fmtOut = await run(`v4l2-ctl -d ${node} --list-formats-ext 2>/dev/null`).catch(() => '')
+        const formats: { codec: string; resolutions: { w: number; h: number; fps: number }[] }[] = []
+        let curFmt: typeof formats[0] | null = null
+        for (const line of fmtOut.split('\n')) {
+          const fm = line.match(/\[.*?\]:\s+'(\w+)'/)
+          if (fm) { curFmt = { codec: fm[1], resolutions: [] }; formats.push(curFmt); continue }
+          const rm = line.match(/Size:\s+Discrete\s+(\d+)x(\d+)/)
+          if (rm && curFmt) {
+            const fpsMatch = fmtOut.split('\n').slice(fmtOut.split('\n').indexOf(line) + 1)
+              .find(l => l.includes('Interval'))?.match(/\((\d+\.\d+)\s+fps\)/)
+            curFmt.resolutions.push({ w: parseInt(rm[1]), h: parseInt(rm[2]), fps: parseFloat(fpsMatch?.[1] || '0') })
+          }
+        }
+
+        // Controls
+        const ctrlOut = await run(`v4l2-ctl -d ${node} --list-ctrls 2>/dev/null`).catch(() => '')
+        const controls: { id: string; name: string; type: string; min: number; max: number; step: number; value: number; default: number }[] = []
+        for (const line of ctrlOut.split('\n')) {
+          const m = line.match(/^\s*(\w+)\s+0x[\da-f]+\s+\((\w+)\)\s*:\s*(.+)$/)
+          if (!m) continue
+          const [, name, type, rest] = m
+          if (type === 'button') continue
+          const get = (k: string) => parseFloat(rest.match(new RegExp(`${k}=([-\\d.]+)`))?.[1] || '0')
+          controls.push({ id: name, name: name.replace(/_/g, ' '), type, min: get('min'), max: get('max'), step: get('step') || 1, value: get('value'), default: get('default') })
+        }
+
+        // Privacy: check if any process has the device open
+        const fuserOut = await run(`fuser ${node} 2>/dev/null`).catch(() => '')
+        const inUse = fuserOut.trim().length > 0
+        const usingPids = fuserOut.trim().split(/\s+/).filter(Boolean)
+
+        cameras.push({ node, name: grp.name, driver, bus: grp.bus, inUse, usingPids, formats, controls })
+        break // one node per group is enough
+      }
+    }
+
+    // ipu6 diagnostic (keep for transparency)
+    const ipu6Loaded = (await run('lsmod 2>/dev/null').catch(() => '')).includes('intel_ipu6')
+    const halInstalled = existsSync('/usr/lib/libcamhal/plugins/ipu6epmtl.so') ||
+                         existsSync('/usr/lib/x86_64-linux-gnu/libcamhal/plugins')
+
+    return { v4l2Present, cameras, ipu6Loaded, halInstalled }
+  })
+
+  ipcMain.handle('camera:setControl', async (_, node: string, controlId: string, value: number) => {
+    if (!/^\/dev\/video\d+$/.test(node)) throw new Error('Invalid device path')
+    if (!/^\w+$/.test(controlId)) throw new Error('Invalid control name')
+    return run(`v4l2-ctl -d ${node} --set-ctrl ${controlId}=${value}`)
   })
 
   // ── Security ───────────────────────────────────────────────────────────────
@@ -2033,6 +2114,10 @@ export async function registerIpcHandlers(): Promise<void> {
       }
     }
 
+    // Current wallpaper
+    const bg = 'org.gnome.desktop.background'
+    const wallpaperRaw = await gs(bg, 'picture-uri').catch(() => '')
+
     return {
       colorScheme:      clean(colorSchemeRaw) || 'default',
       gtkTheme:         clean(gtkThemeRaw),
@@ -2043,22 +2128,45 @@ export async function registerIpcHandlers(): Promise<void> {
       cursorSize:       parseInt(cursorSizeRaw) || 24,
       availableThemes:  [...themes].sort(),
       availableIcons:   [...icons].sort(),
+      wallpaper:        clean(wallpaperRaw).replace(/^file:\/\//, ''),
     }
+  })
+
+  ipcMain.handle('appearance:listWallpapers', async () => {
+    const EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'])
+    const dirs = ['/usr/share/backgrounds', `${homedir()}/Pictures`]
+    const result: { path: string; name: string }[] = []
+    for (const dir of dirs) {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => [] as import('fs').Dirent[])
+      for (const e of entries) {
+        if (!e.isFile()) continue
+        const ext = e.name.slice(e.name.lastIndexOf('.')).toLowerCase()
+        if (EXTS.has(ext)) result.push({ path: `${dir}/${e.name}`, name: e.name.replace(/\.[^.]+$/, '') })
+      }
+    }
+    return result
   })
 
   ipcMain.handle('appearance:set', async (_, opts: {
     colorScheme?: string; gtkTheme?: string; iconTheme?: string
-    cursorTheme?: string; textScale?: number; cursorSize?: number
+    cursorTheme?: string; textScale?: number; cursorSize?: number; wallpaper?: string
   }) => {
     const gs = (schema: string, key: string, val: string) =>
       run(`gsettings set ${schema} ${key} ${val}`)
-    const i = 'org.gnome.desktop.interface'
-    if (opts.colorScheme !== undefined) await gs(i, 'color-scheme',        `'${opts.colorScheme}'`)
-    if (opts.gtkTheme    !== undefined) await gs(i, 'gtk-theme',           `'${opts.gtkTheme}'`)
-    if (opts.iconTheme   !== undefined) await gs(i, 'icon-theme',          `'${opts.iconTheme}'`)
-    if (opts.cursorTheme !== undefined) await gs(i, 'cursor-theme',        `'${opts.cursorTheme}'`)
-    if (opts.textScale   !== undefined) await gs(i, 'text-scaling-factor', opts.textScale.toFixed(2))
-    if (opts.cursorSize  !== undefined) await gs(i, 'cursor-size',         String(opts.cursorSize))
+    const i  = 'org.gnome.desktop.interface'
+    const bg = 'org.gnome.desktop.background'
+    if (opts.colorScheme !== undefined) await gs(i,  'color-scheme',        `'${opts.colorScheme}'`)
+    if (opts.gtkTheme    !== undefined) await gs(i,  'gtk-theme',           `'${opts.gtkTheme}'`)
+    if (opts.iconTheme   !== undefined) await gs(i,  'icon-theme',          `'${opts.iconTheme}'`)
+    if (opts.cursorTheme !== undefined) await gs(i,  'cursor-theme',        `'${opts.cursorTheme}'`)
+    if (opts.textScale   !== undefined) await gs(i,  'text-scaling-factor', opts.textScale.toFixed(2))
+    if (opts.cursorSize  !== undefined) await gs(i,  'cursor-size',         String(opts.cursorSize))
+    if (opts.wallpaper !== undefined) {
+      const path = opts.wallpaper.replace(/^file:\/\//, '')
+      const uri  = `'file://${path}'`
+      await gs(bg, 'picture-uri',      uri)
+      await gs(bg, 'picture-uri-dark', uri)
+    }
     return { ok: true }
   })
 
@@ -2138,41 +2246,7 @@ export async function registerIpcHandlers(): Promise<void> {
     return privilegedOp('user-toggle-sudo', username, action)
   })
 
-  // ── Services ───────────────────────────────────────────────────────────────
-  ipcMain.handle('services:list', async () => {
-    const [unitsOut, filesOut] = await Promise.all([
-      run('systemctl list-units --type=service --all --no-pager --plain 2>/dev/null').catch(() => ''),
-      run('systemctl list-unit-files --type=service --no-pager --plain 2>/dev/null').catch(() => ''),
-    ])
-
-    const enabledMap: Record<string, string> = {}
-    for (const line of filesOut.split('\n').slice(1)) {
-      const parts = line.trim().split(/\s+/)
-      if (parts.length >= 2 && parts[0].endsWith('.service')) {
-        enabledMap[parts[0]] = parts[1]
-      }
-    }
-
-    const services: { unit: string; load: string; active: string; sub: string; description: string; enabledState: string }[] = []
-    for (const line of unitsOut.split('\n')) {
-      const trimmed = line.replace(/^[●✗\s]+/, '').trim()
-      const m = trimmed.match(/^(\S+\.service)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)?$/)
-      if (!m) continue
-      const [, unit, load, active, sub, desc = ''] = m
-      services.push({ unit, load, active, sub, description: desc.trim(), enabledState: enabledMap[unit] || 'static' })
-    }
-
-    return services.sort((a, b) => {
-      const o: Record<string, number> = { failed: 0, active: 1, activating: 2, inactive: 3, deactivating: 4 }
-      return (o[a.active] ?? 5) - (o[b.active] ?? 5)
-    })
-  })
-
-  ipcMain.handle('services:action', async (_, unit: string, action: string) => {
-    if (!unit.endsWith('.service')) throw new Error('Must be a .service unit')
-    if (!['start', 'stop', 'restart', 'enable', 'disable'].includes(action)) throw new Error('Invalid action')
-    return privilegedOp('service-action', action, unit)
-  })
+  // services:list and services:action already registered above (line ~1231)
 
   // ── Printers ───────────────────────────────────────────────────────────────
   ipcMain.handle('printers:list', async () => {
@@ -2329,6 +2403,367 @@ export async function registerIpcHandlers(): Promise<void> {
       await gs(p, 'ignore-hosts', arr)
     }
     return { ok: true }
+  })
+
+  // ── Clipboard ──────────────────────────────────────────────────────────────
+  ipcMain.handle('clipboard:write', (_, text: string) => {
+    clipboard.writeText(text)
+    return { ok: true }
+  })
+
+  // ── SSH Keys ───────────────────────────────────────────────────────────────
+  ipcMain.handle('ssh:keys', async () => {
+    const sshDir = `${homedir()}/.ssh`
+    const files = await readdir(sshDir).catch(() => [] as string[])
+    const pubFiles = files.filter(f => f.endsWith('.pub'))
+
+    const keys = []
+    for (const pub of pubFiles) {
+      const content = await readFile(`${sshDir}/${pub}`, 'utf8').catch(() => '')
+      const parts   = content.trim().split(/\s+/)
+      const type    = parts[0] || 'unknown'
+      const comment = parts.slice(2).join(' ') || ''
+      const privName = pub.replace('.pub', '')
+      const hasPrivate = files.includes(privName)
+      const fpOut = await run(`ssh-keygen -lf "${sshDir}/${pub}" 2>/dev/null`).catch(() => '')
+      const fingerprint = fpOut.match(/\d+\s+(SHA256:\S+)/)?.[1] || ''
+      const bits = parseInt(fpOut.match(/^(\d+)\s+/)?.[1] || '0')
+      keys.push({ name: privName, type, comment, fingerprint, bits, hasPrivate, publicKey: content.trim() })
+    }
+
+    const authContent = await readFile(`${sshDir}/authorized_keys`, 'utf8').catch(() => '')
+    const authorizedKeys = authContent.split('\n')
+      .map((l, i) => ({ line: i, raw: l }))
+      .filter(({ raw }) => raw.trim() && !raw.trim().startsWith('#'))
+      .map(({ line, raw }) => {
+        const p = raw.trim().split(/\s+/)
+        return { line, type: p[0], comment: p.slice(2).join(' '), key: raw.trim() }
+      })
+
+    return { keys, authorizedKeys, sshDir }
+  })
+
+  ipcMain.handle('ssh:generate', async (_, type: string, comment: string, filename: string) => {
+    if (!['ed25519', 'rsa', 'ecdsa'].includes(type)) throw new Error('Invalid key type')
+    if (!/^[a-zA-Z0-9._-]+$/.test(filename)) throw new Error('Invalid filename')
+    const sshDir = `${homedir()}/.ssh`
+    await mkdir(sshDir, { recursive: true })
+    const keyPath = `${sshDir}/${filename}`
+    if (existsSync(keyPath)) throw new Error(`Key "${filename}" already exists`)
+    const bits  = type === 'rsa' ? ['-b', '4096'] : []
+    const out = await run(`ssh-keygen -t ${type} ${bits.join(' ')} -C '${comment || filename}' -f '${keyPath}' -N '' 2>&1`)
+    return out
+  })
+
+  ipcMain.handle('ssh:deleteKey', async (_, name: string) => {
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid key name')
+    const sshDir = `${homedir()}/.ssh`
+    await unlink(`${sshDir}/${name}`).catch(() => {})
+    await unlink(`${sshDir}/${name}.pub`).catch(() => {})
+    return { ok: true }
+  })
+
+  // ── Crontab ────────────────────────────────────────────────────────────────
+  ipcMain.handle('crontab:list', async () => {
+    return run('crontab -l 2>/dev/null').catch(() => '')
+  })
+
+  ipcMain.handle('crontab:set', async (_, content: string) => {
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in crontab content')
+    const tmpPath = `/tmp/lcc-crontab-${Date.now()}`
+    await writeFile(tmpPath, content.trimEnd() + '\n', 'utf8')
+    try { return await run(`crontab '${tmpPath}'`) }
+    finally { await unlink(tmpPath).catch(() => {}) }
+  })
+
+  // ── Default Apps ────────────────────────────────────────────────────────────
+  const MIME_CATEGORIES = [
+    { id: 'browser',   label: 'Web Browser',   mimes: ['x-scheme-handler/http', 'x-scheme-handler/https'] },
+    { id: 'email',     label: 'Email',          mimes: ['x-scheme-handler/mailto'] },
+    { id: 'files',     label: 'File Manager',   mimes: ['inode/directory'] },
+    { id: 'text',      label: 'Text Editor',    mimes: ['text/plain'] },
+    { id: 'images',    label: 'Image Viewer',   mimes: ['image/jpeg', 'image/png'] },
+    { id: 'music',     label: 'Music Player',   mimes: ['audio/mpeg'] },
+    { id: 'video',     label: 'Video Player',   mimes: ['video/mp4'] },
+    { id: 'pdf',       label: 'PDF Viewer',     mimes: ['application/pdf'] },
+    { id: 'calendar',  label: 'Calendar',       mimes: ['text/calendar'] },
+  ]
+
+  async function desktopName(desktopFile: string): Promise<string> {
+    if (!desktopFile) return ''
+    const dirs = ['/usr/share/applications', `${homedir()}/.local/share/applications`]
+    for (const dir of dirs) {
+      const content = await readFile(`${dir}/${desktopFile}`, 'utf8').catch(() => '')
+      const m = content.match(/^Name=(.+)$/m)
+      if (m) return m[1].trim()
+    }
+    return desktopFile.replace(/\.desktop$/, '')
+  }
+
+  async function appsForMime(mime: string): Promise<{ id: string; name: string }[]> {
+    const dirs = ['/usr/share/applications', `${homedir()}/.local/share/applications`]
+    const apps: { id: string; name: string }[] = []
+    const seen = new Set<string>()
+    for (const dir of dirs) {
+      const files = await readdir(dir).catch(() => [] as string[])
+      for (const f of files.filter(f => f.endsWith('.desktop'))) {
+        if (seen.has(f)) continue
+        const content = await readFile(`${dir}/${f}`, 'utf8').catch(() => '')
+        if (!content.includes(mime)) continue
+        // Skip hidden or NoDisplay apps
+        if (/^NoDisplay=true$/m.test(content) || /^Hidden=true$/m.test(content)) continue
+        const name = content.match(/^Name=(.+)$/m)?.[1]?.trim() || f.replace('.desktop', '')
+        apps.push({ id: f, name })
+        seen.add(f)
+      }
+    }
+    return apps.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  ipcMain.handle('defaultapps:list', async () => {
+    const result: { id: string; label: string; current: string; currentName: string; apps: { id: string; name: string }[] }[] = []
+    for (const cat of MIME_CATEGORIES) {
+      const primary = cat.mimes[0]
+      const current = (await run(`xdg-mime query default ${primary} 2>/dev/null`).catch(() => '')).trim()
+      const currentName = await desktopName(current)
+      const apps = await appsForMime(primary)
+      result.push({ id: cat.id, label: cat.label, current, currentName, apps })
+    }
+    return result
+  })
+
+  ipcMain.handle('defaultapps:set', async (_, categoryId: string, desktopFile: string) => {
+    if (!/^[a-zA-Z0-9@._-]+\.desktop$/.test(desktopFile)) throw new Error('Invalid desktop file')
+    const cat = MIME_CATEGORIES.find(c => c.id === categoryId)
+    if (!cat) throw new Error('Unknown category')
+    for (const mime of cat.mimes) {
+      await run(`xdg-mime default '${desktopFile}' '${mime}'`).catch(() => {})
+    }
+    return { ok: true }
+  })
+
+  // ── Language & Region ───────────────────────────────────────────────────────
+  ipcMain.handle('locale:status', async () => {
+    const statusOut = await run('localectl status 2>/dev/null').catch(() => '')
+    const lang     = statusOut.match(/System Locale:\s+LANG=(\S+)/)?.[1] || ''
+    const x11      = statusOut.match(/X11 Layout:\s+(\S+)/)?.[1] || ''
+    const region   = (await run(`gsettings get org.gnome.system.locale region 2>/dev/null`).catch(() => '')).trim().replace(/^'|'$/g, '')
+    return { lang, x11Layout: x11, region: region || lang }
+  })
+
+  ipcMain.handle('locale:listLocales', async () => {
+    const out = await run('localectl list-locales 2>/dev/null').catch(() => '')
+    return out.split('\n').map(l => l.trim()).filter(Boolean)
+  })
+
+  ipcMain.handle('locale:set', async (_, locale: string) => {
+    if (!/^[a-zA-Z]{2,8}(_[A-Z]{2,4})?(\.[A-Za-z0-9-]+)?(@\w+)?$/.test(locale)) throw new Error('Invalid locale')
+    return privilegedOp('set-locale', locale)
+  })
+
+  // ── Accessibility ───────────────────────────────────────────────────────────
+  ipcMain.handle('accessibility:status', async () => {
+    const gs = (schema: string, key: string) =>
+      run(`gsettings get ${schema} ${key} 2>/dev/null`).catch(() => 'false')
+    const clean = (s: string) => s.trim()
+    const i   = 'org.gnome.desktop.interface'
+    const app = 'org.gnome.desktop.a11y.applications'
+    const kbd = 'org.gnome.desktop.a11y.keyboard'
+    const mou = 'org.gnome.desktop.a11y.mouse'
+    const snd = 'org.gnome.desktop.sound'
+
+    const [highContrast, largeText,
+           screenReader, magnifier,
+           stickyKeys, slowKeys, bounceKeys, toggleKeys, mouseKeys,
+           secondaryClick, dwellClick,
+           visualBell] = await Promise.all([
+      gs(i,   'high-contrast'),         gs(i,   'text-scaling-factor'),
+      gs(app, 'screen-reader-enabled'), gs(app, 'screen-magnifier-enabled'),
+      gs(kbd, 'stickykeys-enable'),     gs(kbd, 'slowkeys-enable'),
+      gs(kbd, 'bouncekeys-enable'),     gs(kbd, 'togglekeys-enable'),
+      gs(kbd, 'mousekeys-enable'),
+      gs(mou, 'secondary-click-enabled'), gs(mou, 'dwell-click-enabled'),
+      gs(snd, 'visual-bell'),
+    ])
+
+    return {
+      highContrast:    clean(highContrast) !== 'false' && clean(highContrast) !== '',
+      largeText:       parseFloat(clean(largeText)) > 1.0,
+      screenReader:    clean(screenReader) === 'true',
+      magnifier:       clean(magnifier) === 'true',
+      stickyKeys:      clean(stickyKeys) === 'true',
+      slowKeys:        clean(slowKeys) === 'true',
+      bounceKeys:      clean(bounceKeys) === 'true',
+      toggleKeys:      clean(toggleKeys) === 'true',
+      mouseKeys:       clean(mouseKeys) === 'true',
+      secondaryClick:  clean(secondaryClick) === 'true',
+      dwellClick:      clean(dwellClick) === 'true',
+      visualBell:      clean(visualBell) === 'true',
+    }
+  })
+
+  ipcMain.handle('accessibility:set', async (_, opts: Record<string, boolean>) => {
+    const gs = (schema: string, key: string, val: string) =>
+      run(`gsettings set ${schema} ${key} ${val}`)
+    const i   = 'org.gnome.desktop.interface'
+    const app = 'org.gnome.desktop.a11y.applications'
+    const kbd = 'org.gnome.desktop.a11y.keyboard'
+    const mou = 'org.gnome.desktop.a11y.mouse'
+    const snd = 'org.gnome.desktop.sound'
+
+    const bv = (v: boolean) => v ? 'true' : 'false'
+    if (opts.highContrast     !== undefined) await gs(i,   'high-contrast',              bv(opts.highContrast))
+    if (opts.screenReader     !== undefined) await gs(app, 'screen-reader-enabled',       bv(opts.screenReader))
+    if (opts.magnifier        !== undefined) await gs(app, 'screen-magnifier-enabled',    bv(opts.magnifier))
+    if (opts.stickyKeys       !== undefined) await gs(kbd, 'stickykeys-enable',           bv(opts.stickyKeys))
+    if (opts.slowKeys         !== undefined) await gs(kbd, 'slowkeys-enable',             bv(opts.slowKeys))
+    if (opts.bounceKeys       !== undefined) await gs(kbd, 'bouncekeys-enable',           bv(opts.bounceKeys))
+    if (opts.toggleKeys       !== undefined) await gs(kbd, 'togglekeys-enable',           bv(opts.toggleKeys))
+    if (opts.mouseKeys        !== undefined) await gs(kbd, 'mousekeys-enable',            bv(opts.mouseKeys))
+    if (opts.secondaryClick   !== undefined) await gs(mou, 'secondary-click-enabled',     bv(opts.secondaryClick))
+    if (opts.dwellClick       !== undefined) await gs(mou, 'dwell-click-enabled',         bv(opts.dwellClick))
+    if (opts.visualBell       !== undefined) await gs(snd, 'visual-bell',                 bv(opts.visualBell))
+    return { ok: true }
+  })
+
+  // ── Hosts file ──────────────────────────────────────────────────────────────
+  ipcMain.handle('hosts:read', async () => {
+    return readFile('/etc/hosts', 'utf8').catch(() => '')
+  })
+
+  ipcMain.handle('hosts:write', async (_, content: string) => {
+    // Basic safety: ensure content only has valid hosts-file characters
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in hosts content')
+    const tmpPath = `/tmp/lcc-hosts-${Date.now()}`
+    await writeFile(tmpPath, content, 'utf8')
+    try {
+      return await privilegedOp('hosts-write', tmpPath)
+    } finally {
+      await unlink(tmpPath).catch(() => {})
+    }
+  })
+
+  // ── DNS / Resolver ──────────────────────────────────────────────────────────
+  ipcMain.handle('dns:status', async () => {
+    // Try systemd-resolved first
+    const resolvedOut = await run('resolvectl status 2>/dev/null').catch(() => '')
+    const resolved = resolvedOut.length > 0
+
+    // Parse global DNS from resolvectl
+    const globalDns: string[] = []
+    const globalSearch: string[] = []
+    if (resolved) {
+      const globalSection = resolvedOut.match(/Global\s*\n([\s\S]*?)(?:\nLink |\n$|$)/)?.[1] || ''
+      for (const line of globalSection.split('\n')) {
+        if (/DNS Servers:/i.test(line)) globalDns.push(...line.replace(/.*DNS Servers:\s*/i,'').trim().split(/\s+/).filter(Boolean))
+        if (/DNS Domain:/i.test(line))  globalSearch.push(...line.replace(/.*DNS Domain:\s*/i,'').trim().split(/\s+/).filter(Boolean))
+      }
+    }
+
+    // Per-link DNS
+    const links: { name: string; index: string; dns: string[]; search: string[] }[] = []
+    if (resolved) {
+      const linkBlocks = resolvedOut.matchAll(/Link (\d+) \(([^)]+)\)([\s\S]*?)(?=\nLink |\n$|$)/g)
+      for (const m of linkBlocks) {
+        const dns: string[] = []
+        const search: string[] = []
+        for (const line of m[3].split('\n')) {
+          if (/DNS Servers:/i.test(line)) dns.push(...line.replace(/.*DNS Servers:\s*/i,'').trim().split(/\s+/).filter(Boolean))
+          if (/DNS Domain:/i.test(line))  search.push(...line.replace(/.*DNS Domain:\s*/i,'').trim().split(/\s+/).filter(Boolean))
+        }
+        if (dns.length || search.length) links.push({ index: m[1], name: m[2], dns, search })
+      }
+    }
+
+    // Fallback: parse /etc/resolv.conf
+    const resolvConf = await readFile('/etc/resolv.conf', 'utf8').catch(() => '')
+    const confNameservers = resolvConf.split('\n')
+      .filter(l => l.startsWith('nameserver'))
+      .map(l => l.replace('nameserver','').trim())
+    const confSearch = resolvConf.split('\n')
+      .filter(l => l.startsWith('search') || l.startsWith('domain'))
+      .flatMap(l => l.replace(/^(search|domain)\s+/,'').trim().split(/\s+/))
+
+    const dnssecOut = await run("resolvectl show-server-state 2>/dev/null | grep DNSSEC | head -5").catch(() => '')
+    const dnssecEnabled = /yes/i.test(dnssecOut)
+
+    return {
+      resolvedActive: resolved,
+      globalDns:      globalDns.length ? globalDns : confNameservers,
+      globalSearch:   globalSearch.length ? globalSearch : confSearch,
+      links,
+      dnssecEnabled,
+      resolvConfRaw:  resolvConf.split('\n').filter(l => l.trim() && !l.startsWith('#')).join('\n'),
+    }
+  })
+
+  ipcMain.handle('dns:setGlobal', async (_, servers: string[], search: string[]) => {
+    // Validate
+    const ipRe = /^(\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]+$/i
+    for (const s of servers) if (!ipRe.test(s)) throw new Error(`Invalid DNS server: ${s}`)
+    for (const d of search) if (!/^[a-zA-Z0-9._-]+$/.test(d)) throw new Error(`Invalid search domain: ${d}`)
+
+    const nsLines = servers.map(s => `nameserver ${s}`).join('\n')
+    const searchLine = search.length ? `search ${search.join(' ')}` : ''
+    const content = `# Generated by Linux Command Centre\n${nsLines}\n${searchLine}\n`.trimEnd() + '\n'
+
+    const tmpPath = `/tmp/lcc-resolv-${Date.now()}`
+    await writeFile(tmpPath, content, 'utf8')
+    try {
+      return await privilegedOp('resolv-write', tmpPath)
+    } finally {
+      await unlink(tmpPath).catch(() => {})
+    }
+  })
+
+  // ── Mounts / fstab ─────────────────────────────────────────────────────────
+  ipcMain.handle('mounts:status', async () => {
+    // Live mount points from /proc/mounts
+    const mountsRaw = await readFile('/proc/mounts', 'utf8').catch(() => '')
+    const SKIP_FS = new Set(['proc','sysfs','devtmpfs','devpts','tmpfs','cgroup','cgroup2',
+      'pstore','securityfs','efivarfs','configfs','debugfs','mqueue','hugetlbfs','fusectl',
+      'binfmt_misc','autofs','bpf','tracefs','overlay','nsfs'])
+    const mounts = mountsRaw.split('\n').filter(Boolean).map(line => {
+      const [device, mountpoint, fstype, options] = line.split(' ')
+      return { device, mountpoint, fstype, options: options || '' }
+    }).filter(m => !SKIP_FS.has(m.fstype) && m.mountpoint !== '/')
+
+    // Add root separately
+    const rootLine = mountsRaw.split('\n').find(l => l.split(' ')[1] === '/')
+    if (rootLine) {
+      const [device, mountpoint, fstype, options] = rootLine.split(' ')
+      mounts.unshift({ device, mountpoint, fstype, options: options || '' })
+    }
+
+    // df for usage
+    const dfOut = await run('df -B1 --output=target,size,used,avail,pcent 2>/dev/null').catch(() => '')
+    const dfMap: Record<string, { size: number; used: number; avail: number; pct: number }> = {}
+    for (const line of dfOut.split('\n').slice(1)) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length >= 5) {
+        dfMap[parts[0]] = {
+          size:  parseInt(parts[1]) || 0,
+          used:  parseInt(parts[2]) || 0,
+          avail: parseInt(parts[3]) || 0,
+          pct:   parseInt(parts[4]) || 0,
+        }
+      }
+    }
+
+    // fstab
+    const fstabRaw = await readFile('/etc/fstab', 'utf8').catch(() => '')
+    const fstab = fstabRaw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).map(line => {
+      const [device, mountpoint, fstype, options, dump, pass] = line.split(/\s+/)
+      return { device, mountpoint, fstype, options: options || '', dump: dump || '0', pass: pass || '0' }
+    }).filter(e => e.device && e.mountpoint)
+
+    const enriched = mounts.filter(m => m.mountpoint).map(m => ({
+      ...m,
+      ...(dfMap[m.mountpoint] || { size: 0, used: 0, avail: 0, pct: 0 }),
+      inFstab: fstab.some(f => f.mountpoint === m.mountpoint),
+    }))
+
+    return { mounts: enriched, fstab }
   })
 }
 

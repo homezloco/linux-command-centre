@@ -3,7 +3,10 @@
   import { Battery, Thermometer, Wifi, Bluetooth, Volume2, Monitor,
            Zap, Mouse, RefreshCw, LayoutGrid, Shield, Keyboard,
            HardDrive, Server, Network, Activity, Usb, ScrollText,
-           Lock, Clock, MousePointer, Paintbrush } from 'lucide-svelte'
+           Lock, Clock, MousePointer, Paintbrush, Users, Wrench,
+           Printer, ShieldCheck, Bell, Globe, AppWindow,
+           Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
+           Dna, FolderOpen } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -24,9 +27,24 @@
   import VpnPanel        from './modules/vpn/VpnPanel.svelte'
   import KeyboardPanel   from './modules/keyboard/KeyboardPanel.svelte'
   import DateTimePanel   from './modules/datetime/DateTimePanel.svelte'
-  import MousePanel      from './modules/mouse/MousePanel.svelte'
-  import AppearancePanel from './modules/appearance/AppearancePanel.svelte'
-  import CommandPalette  from '$lib/CommandPalette.svelte'
+  import MousePanel       from './modules/mouse/MousePanel.svelte'
+  import AppearancePanel   from './modules/appearance/AppearancePanel.svelte'
+  import UsersPanel        from './modules/users/UsersPanel.svelte'
+  import DefaultAppsPanel  from './modules/defaultapps/DefaultAppsPanel.svelte'
+  import LocalePanel       from './modules/locale/LocalePanel.svelte'
+  import AccessibilityPanel from './modules/accessibility/AccessibilityPanel.svelte'
+  import HostsPanel        from './modules/hosts/HostsPanel.svelte'
+  import CameraPanel       from './modules/camera/CameraPanel.svelte'
+  import SSHPanel          from './modules/ssh/SSHPanel.svelte'
+  import CrontabPanel      from './modules/crontab/CrontabPanel.svelte'
+  import DnsPanel          from './modules/dns/DnsPanel.svelte'
+  import MountsPanel       from './modules/mounts/MountsPanel.svelte'
+  import ServicesPanel    from './modules/services/ServicesPanel.svelte'
+  import PrintersPanel    from './modules/printers/PrintersPanel.svelte'
+  import FirewallPanel    from './modules/firewall/FirewallPanel.svelte'
+  import NotificationsPanel from './modules/notifications/NotificationsPanel.svelte'
+  import ProxyPanel       from './modules/proxy/ProxyPanel.svelte'
+  import CommandPalette   from '$lib/CommandPalette.svelte'
   import { invoke }      from '$lib/utils'
 
   type Mod = { id: string; label: string; icon: typeof Battery; component: typeof BatteryPanel }
@@ -43,10 +61,14 @@
     {
       label: 'Network',
       items: [
-        { id: 'network',   label: 'Network',   icon: Network,     component: NetworkPanel },
-        { id: 'vpn',       label: 'VPN',       icon: Lock,        component: VpnPanel },
-        { id: 'wifi',      label: 'Wi-Fi',     icon: Wifi,        component: WifiPanel },
-        { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth,   component: BluetoothPanel },
+        { id: 'network',   label: 'Network',   icon: Network,      component: NetworkPanel },
+        { id: 'vpn',       label: 'VPN',       icon: Lock,         component: VpnPanel },
+        { id: 'wifi',      label: 'Wi-Fi',     icon: Wifi,         component: WifiPanel },
+        { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth,    component: BluetoothPanel },
+        { id: 'proxy',     label: 'Proxy',     icon: Globe,        component: ProxyPanel },
+        { id: 'firewall',  label: 'Firewall',  icon: ShieldCheck,  component: FirewallPanel },
+        { id: 'dns',       label: 'DNS',       icon: Dna,          component: DnsPanel },
+        { id: 'hosts',     label: 'Hosts',     icon: FileText,     component: HostsPanel },
       ]
     },
     {
@@ -61,23 +83,34 @@
         { id: 'keyboard',  label: 'Keyboard',  icon: Keyboard,      component: KeyboardPanel },
         { id: 'usb',       label: 'USB',       icon: Usb,           component: UsbPanel },
         { id: 'storage',   label: 'Storage',   icon: HardDrive,     component: StoragePanel },
+        { id: 'mounts',    label: 'Mounts',    icon: FolderOpen,    component: MountsPanel },
+        { id: 'printers',  label: 'Printers',  icon: Printer,       component: PrintersPanel },
+        { id: 'camera',    label: 'Camera',    icon: Camera,        component: CameraPanel },
       ]
     },
     {
       label: 'System',
       items: [
-        { id: 'power',      label: 'Power',      icon: Zap,         component: PowerPanel },
-        { id: 'security',   label: 'Security',   icon: Shield,      component: SecurityPanel },
-        { id: 'startup',    label: 'Startup',    icon: LayoutGrid,  component: StartupPanel },
-        { id: 'datetime',   label: 'Date & Time',icon: Clock,       component: DateTimePanel },
-        { id: 'appearance', label: 'Appearance', icon: Paintbrush,  component: AppearancePanel },
+        { id: 'power',         label: 'Power',         icon: Zap,          component: PowerPanel },
+        { id: 'security',      label: 'Security',      icon: Shield,       component: SecurityPanel },
+        { id: 'startup',       label: 'Startup',       icon: LayoutGrid,   component: StartupPanel },
+        { id: 'datetime',      label: 'Date & Time',   icon: Clock,        component: DateTimePanel },
+        { id: 'appearance',    label: 'Appearance',    icon: Paintbrush,   component: AppearancePanel },
+        { id: 'notifications',  label: 'Notifications', icon: Bell,          component: NotificationsPanel },
+        { id: 'users',          label: 'Users',         icon: Users,         component: UsersPanel },
+        { id: 'defaultapps',    label: 'Default Apps',  icon: AppWindow,     component: DefaultAppsPanel },
+        { id: 'locale',         label: 'Language',      icon: Languages,     component: LocalePanel },
+        { id: 'accessibility',  label: 'Accessibility', icon: Accessibility, component: AccessibilityPanel },
       ]
     },
     {
       label: 'Tools',
       items: [
-        { id: 'updates', label: 'Updates', icon: RefreshCw,  component: UpdatesPanel },
-        { id: 'logs',    label: 'Logs',    icon: ScrollText, component: LogsPanel },
+        { id: 'updates',  label: 'Updates',  icon: RefreshCw,     component: UpdatesPanel },
+        { id: 'logs',     label: 'Logs',     icon: ScrollText,    component: LogsPanel },
+        { id: 'services', label: 'Services', icon: Wrench,        component: ServicesPanel },
+        { id: 'ssh',      label: 'SSH Keys', icon: KeyRound,      component: SSHPanel },
+        { id: 'crontab',  label: 'Crontab',  icon: CalendarClock, component: CrontabPanel },
       ]
     },
   ]

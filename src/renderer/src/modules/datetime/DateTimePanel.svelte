@@ -154,7 +154,6 @@
           <input
             bind:value={tzSearch}
             placeholder="Search timezone…"
-            autofocus
             class="w-full rounded-md border border-border bg-secondary/50 px-3 py-1.5
                    text-sm placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary"
           />

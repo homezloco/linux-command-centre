@@ -4,7 +4,7 @@
   import { RefreshCw, Play, Square, RotateCcw, Search } from 'lucide-svelte'
 
   type Service = {
-    unit: string; load: string; active: string; sub: string
+    name: string; active: string; sub: string
     description: string; enabledState: string
   }
 
@@ -25,9 +25,9 @@
     finally { loading = false; refreshing = false }
   }
 
-  async function act(unit: string, action: string) {
-    working = `${unit}:${action}`; error = ''
-    try { await invoke('services:action', unit, action); await load(true) }
+  async function act(name: string, action: string) {
+    working = `${name}:${action}`; error = ''
+    try { await invoke('services:action', name, action); await load(true) }
     catch (e) { error = String(e) }
     finally { working = null }
   }
@@ -38,7 +38,7 @@
       if (filter === 'failed' && s.active !== 'failed') return false
       if (query.trim()) {
         const q = query.toLowerCase()
-        return s.unit.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+        return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
       }
       return true
     })
@@ -63,8 +63,8 @@
     return unit.replace(/\.service$/, '')
   }
 
-  function isWorking(unit: string, action: string): boolean {
-    return working === `${unit}:${action}`
+  function isWorking(name: string, action: string): boolean {
+    return working === `${name}:${action}`
   }
 
   onMount(() => load())
@@ -124,7 +124,7 @@
           <!-- Name + desc -->
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-medium font-mono">{shortUnit(svc.unit)}</span>
+              <span class="text-sm font-medium font-mono">{shortUnit(svc.name)}</span>
               {#if svc.enabledState === 'enabled'}
                 <span class="text-[9px] px-1 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">enabled</span>
               {:else if svc.enabledState === 'disabled'}
@@ -145,34 +145,34 @@
           <div class="flex items-center gap-1 shrink-0">
             {#if svc.active === 'active'}
               <button
-                onclick={() => act(svc.unit, 'stop')}
+                onclick={() => act(svc.name, 'stop')}
                 disabled={working !== null}
-                aria-label="Stop {svc.unit}"
+                aria-label="Stop {svc.name}"
                 title="Stop"
                 class="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
               >
-                {#if isWorking(svc.unit, 'stop')}<RefreshCw size={12} class="animate-spin" />
+                {#if isWorking(svc.name, 'stop')}<RefreshCw size={12} class="animate-spin" />
                 {:else}<Square size={12} />{/if}
               </button>
               <button
-                onclick={() => act(svc.unit, 'restart')}
+                onclick={() => act(svc.name, 'restart')}
                 disabled={working !== null}
-                aria-label="Restart {svc.unit}"
+                aria-label="Restart {svc.name}"
                 title="Restart"
                 class="p-1.5 rounded hover:bg-secondary text-muted-foreground transition-colors disabled:opacity-40"
               >
-                {#if isWorking(svc.unit, 'restart')}<RefreshCw size={12} class="animate-spin" />
+                {#if isWorking(svc.name, 'restart')}<RefreshCw size={12} class="animate-spin" />
                 {:else}<RotateCcw size={12} />{/if}
               </button>
             {:else}
               <button
-                onclick={() => act(svc.unit, 'start')}
+                onclick={() => act(svc.name, 'start')}
                 disabled={working !== null}
-                aria-label="Start {svc.unit}"
+                aria-label="Start {svc.name}"
                 title="Start"
                 class="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-green-400 transition-colors disabled:opacity-40"
               >
-                {#if isWorking(svc.unit, 'start')}<RefreshCw size={12} class="animate-spin" />
+                {#if isWorking(svc.name, 'start')}<RefreshCw size={12} class="animate-spin" />
                 {:else}<Play size={12} />{/if}
               </button>
             {/if}

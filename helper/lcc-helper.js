@@ -227,6 +227,41 @@ const ops = {
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid printer name')
     execFileSync('lpadmin', ['-x', name])
     console.log(`Printer deleted: ${name}`)
+  },
+
+  'set-locale'(locale) {
+    if (!/^[a-zA-Z]{2,8}(_[A-Z]{2,4})?(\.[A-Za-z0-9-]+)?(@\w+)?$/.test(locale)) throw new Error('Invalid locale')
+    execFileSync('localectl', ['set-locale', `LANG=${locale}`])
+    console.log(`Locale set to ${locale}`)
+  },
+
+  'hosts-write'(tmpPath) {
+    if (!tmpPath || !/^\/tmp\/lcc-hosts-\d+$/.test(tmpPath)) throw new Error('Invalid temp path')
+    if (!existsSync(tmpPath)) throw new Error('Temp file not found')
+    const content = readFileSync(tmpPath, 'utf8')
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in content')
+    if (!content.includes('127.0.0.1') && !content.includes('localhost')) {
+      throw new Error('Content must contain localhost entry')
+    }
+    writeFileSync('/etc/hosts', content, 'utf8')
+    console.log('/etc/hosts updated')
+  },
+
+  'resolv-write'(tmpPath) {
+    if (!tmpPath || !/^\/tmp\/lcc-resolv-\d+$/.test(tmpPath)) throw new Error('Invalid temp path')
+    if (!existsSync(tmpPath)) throw new Error('Temp file not found')
+    const content = readFileSync(tmpPath, 'utf8')
+    if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in resolv content')
+    // Must contain at least one nameserver
+    if (!content.includes('nameserver')) throw new Error('Content must contain at least one nameserver')
+    // Unlink the symlink (systemd-resolved manages it) if it exists as a symlink
+    const { lstatSync, unlinkSync } = require('fs')
+    try {
+      const stat = lstatSync('/etc/resolv.conf')
+      if (stat.isSymbolicLink()) unlinkSync('/etc/resolv.conf')
+    } catch { /* ignore */ }
+    writeFileSync('/etc/resolv.conf', content, 'utf8')
+    console.log('/etc/resolv.conf updated')
   }
 }
 

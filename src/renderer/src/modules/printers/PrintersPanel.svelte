@@ -81,8 +81,7 @@
         <p class="text-sm text-muted-foreground">No printers configured</p>
         <p class="text-xs text-muted-foreground/60">
           Add printers via GNOME Settings or the
-          <a href="#" onclick={(e) => e.preventDefault()} class="text-primary hover:underline">CUPS web interface</a>
-          at localhost:631
+          <span class="text-primary font-medium">CUPS web interface at localhost:631</span>
         </p>
       </div>
 

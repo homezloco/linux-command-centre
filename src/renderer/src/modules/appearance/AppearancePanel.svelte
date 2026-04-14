@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, Palette, Sun, Moon, Monitor, Type, MousePointer2 } from 'lucide-svelte'
+  import { RefreshCw, Palette, Sun, Moon, Monitor, Type, MousePointer2, ImageIcon } from 'lucide-svelte'
 
   type AppearanceStatus = {
     colorScheme: string; gtkTheme: string; iconTheme: string
     cursorTheme: string; fontName: string; textScale: number; cursorSize: number
     availableThemes: string[]; availableIcons: string[]
+    wallpaper: string
   }
+
+  type WallpaperEntry = { path: string; name: string }
 
   let status  = $state<AppearanceStatus | null>(null)
   let loading = $state(true)
@@ -21,6 +24,9 @@
   let cursorTheme  = $state('')
   let textScale    = $state(1.0)
   let cursorSize   = $state(24)
+  let wallpaper    = $state('')
+  let wallpapers   = $state<WallpaperEntry[]>([])
+  let wpLoading    = $state(false)
 
   const COLOR_SCHEMES = [
     { value: 'default',        label: 'System default', icon: Monitor },
@@ -40,7 +46,10 @@
       cursorTheme = status.cursorTheme
       textScale   = status.textScale
       cursorSize  = status.cursorSize
-      dirty       = false
+      // Ensure wallpaper has file:// prefix for <img> display
+      const wp = status.wallpaper || ''
+      wallpaper = wp && !wp.startsWith('file://') ? `file://${wp}` : wp
+      dirty     = false
     } catch (e) { error = String(e) }
     finally { loading = false }
   }
@@ -48,15 +57,22 @@
   async function save() {
     saving = true; error = ''
     try {
-      await invoke('appearance:set', { colorScheme, gtkTheme, iconTheme, cursorTheme, textScale, cursorSize })
+      await invoke('appearance:set', { colorScheme, gtkTheme, iconTheme, cursorTheme, textScale, cursorSize, wallpaper })
       await load()
     } catch (e) { error = String(e) }
     finally { saving = false }
   }
 
+  async function loadWallpapers() {
+    wpLoading = true
+    try { wallpapers = await invoke<WallpaperEntry[]>('appearance:listWallpapers') }
+    catch { wallpapers = [] }
+    finally { wpLoading = false }
+  }
+
   const mark = () => { dirty = true }
 
-  onMount(() => load())
+  onMount(() => { load(); loadWallpapers() })
 </script>
 
 {#if loading}
@@ -183,6 +199,55 @@
         <p class="text-sm text-muted-foreground">System font</p>
         <p class="text-sm font-medium">{status.fontName}</p>
       </div>
+    </div>
+
+    <!-- Wallpaper -->
+    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+      <p class="text-sm font-medium flex items-center gap-2">
+        <ImageIcon size={14} class="text-muted-foreground" /> Wallpaper
+      </p>
+
+      {#if wallpaper}
+        <div class="rounded-lg overflow-hidden border border-border h-28 bg-secondary/30 relative">
+          <img
+            src={wallpaper}
+            alt="Current wallpaper"
+            class="w-full h-full object-cover"
+            onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+          />
+          <div class="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-mono truncate max-w-[80%]">
+            {wallpaper.replace(/^.*\//, '')}
+          </div>
+        </div>
+      {/if}
+
+      {#if wpLoading}
+        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+          <RefreshCw size={12} class="animate-spin" /> Loading wallpapers…
+        </div>
+      {:else if wallpapers.length > 0}
+        <div class="grid grid-cols-4 gap-2 max-h-56 overflow-y-auto pr-1">
+          {#each wallpapers as wp}
+            {@const isActive = wallpaper === `file://${wp.path}` || wallpaper === wp.path}
+            <button
+              onclick={() => { wallpaper = `file://${wp.path}`; mark() }}
+              title={wp.name}
+              class="relative rounded-md overflow-hidden border-2 aspect-video transition-colors
+                     {isActive ? 'border-primary' : 'border-transparent hover:border-border'}"
+            >
+              <img
+                src="file://{wp.path}"
+                alt={wp.name}
+                class="w-full h-full object-cover"
+                loading="lazy"
+                onerror={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none' }}
+              />
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-xs text-muted-foreground">No wallpapers found in /usr/share/backgrounds or ~/Pictures</p>
+      {/if}
     </div>
 
     {#if error}
