@@ -2765,6 +2765,106 @@ export async function registerIpcHandlers(): Promise<void> {
 
     return { mounts: enriched, fstab }
   })
+
+  // ── SMART Disk Health ───────────────────────────────────────────────────────
+  ipcMain.handle('smart:disks', async () => {
+    const out = await run('lsblk --json -d -o NAME,SIZE,MODEL,TYPE,TRAN 2>/dev/null').catch(() => '{}')
+    try {
+      const parsed = JSON.parse(out)
+      return (parsed.blockdevices || [])
+        .filter((d: any) => d.type === 'disk')
+        .map((d: any) => ({ name: d.name, size: d.size || '', model: (d.model || '').trim(), tran: d.tran || '' }))
+    } catch { return [] }
+  })
+
+  ipcMain.handle('smart:info', async (_, device: string) => {
+    if (!/^\/dev\/[a-zA-Z0-9]+$/.test(device)) throw new Error('Invalid device path')
+    const raw = await privilegedOp('smart-info', device)
+    try { return JSON.parse(raw) }
+    catch { throw new Error('Failed to parse SMART output') }
+  })
+
+  // ── GRUB Boot Manager ───────────────────────────────────────────────────────
+  ipcMain.handle('grub:status', async () => {
+    const content = await readFile('/etc/default/grub', 'utf8').catch(() => '')
+    const get = (key: string) => {
+      const m = content.match(new RegExp(`^\\s*${key}=(.*)`, 'm'))
+      if (!m) return ''
+      return m[1].trim().replace(/^["']|["']$/g, '')
+    }
+    const grubCfg = await readFile('/boot/grub/grub.cfg', 'utf8').catch(() => '')
+    const entries: string[] = []
+    for (const m of grubCfg.matchAll(/^menuentry\s+['"]([^'"]+)['"]/gm)) entries.push(m[1])
+    return {
+      timeout:        get('GRUB_TIMEOUT') || '5',
+      default:        get('GRUB_DEFAULT') || '0',
+      cmdlineDefault: get('GRUB_CMDLINE_LINUX_DEFAULT'),
+      timeoutStyle:   get('GRUB_TIMEOUT_STYLE') || 'menu',
+      entries,
+    }
+  })
+
+  ipcMain.handle('grub:set', async (_, opts: Record<string, string>) => {
+    const allowed = ['GRUB_TIMEOUT', 'GRUB_DEFAULT', 'GRUB_CMDLINE_LINUX_DEFAULT', 'GRUB_TIMEOUT_STYLE']
+    const pairs: string[] = []
+    for (const [k, v] of Object.entries(opts)) {
+      if (!allowed.includes(k)) throw new Error(`Disallowed GRUB key: ${k}`)
+      pairs.push(k, String(v))
+    }
+    if (pairs.length === 0) throw new Error('No changes to apply')
+    return privilegedOp('grub-set', ...pairs)
+  })
+
+  // ── Systemd Timers ──────────────────────────────────────────────────────────
+  ipcMain.handle('timers:list', async () => {
+    const unitFilesOut = await run('systemctl list-unit-files --type=timer --no-pager --no-legend 2>/dev/null').catch(() => '')
+    const enabledMap: Record<string, string> = {}
+    const names: string[] = []
+    for (const line of unitFilesOut.split('\n')) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length >= 2 && parts[0].endsWith('.timer')) {
+        enabledMap[parts[0]] = parts[1]
+        names.push(parts[0])
+      }
+    }
+    if (names.length === 0) return []
+
+    const showOut = await run(
+      `systemctl show ${names.map(n => `'${n}'`).join(' ')} --property=Id,ActiveState,NextElapseUSecRealtime,LastTriggerUSec,Triggers 2>/dev/null`
+    ).catch(() => '')
+
+    const units: Record<string, string>[] = []
+    let cur: Record<string, string> = {}
+    for (const line of showOut.split('\n')) {
+      if (line.trim() === '') {
+        if (cur.Id) units.push(cur)
+        cur = {}
+        continue
+      }
+      const idx = line.indexOf('=')
+      if (idx > 0) cur[line.slice(0, idx)] = line.slice(idx + 1)
+    }
+    if (cur.Id) units.push(cur)
+
+    return units.map(u => {
+      const nextUs = parseInt(u.NextElapseUSecRealtime || '0')
+      const lastUs = parseInt(u.LastTriggerUSec || '0')
+      return {
+        name:      u.Id || '',
+        enabled:   enabledMap[u.Id] || 'unknown',
+        active:    u.ActiveState === 'active',
+        activates: (u.Triggers || '').trim(),
+        next:      nextUs > 0 ? new Date(nextUs / 1000).toISOString() : '',
+        last:      lastUs > 0 ? new Date(lastUs / 1000).toISOString() : '',
+      }
+    })
+  })
+
+  ipcMain.handle('timers:action', async (_, name: string, action: string) => {
+    if (!/^[a-zA-Z0-9@._-]+\.timer$/.test(name)) throw new Error('Invalid timer name')
+    if (!['start', 'stop', 'enable', 'disable'].includes(action)) throw new Error('Invalid action')
+    return privilegedOp('service-action', action, name)
+  })
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

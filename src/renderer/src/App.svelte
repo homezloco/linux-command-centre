@@ -6,7 +6,7 @@
            Lock, Clock, MousePointer, Paintbrush, Users, Wrench,
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
-           Dna, FolderOpen } from 'lucide-svelte'
+           Dna, FolderOpen, Gauge, Layers, Timer } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -44,6 +44,9 @@
   import FirewallPanel    from './modules/firewall/FirewallPanel.svelte'
   import NotificationsPanel from './modules/notifications/NotificationsPanel.svelte'
   import ProxyPanel       from './modules/proxy/ProxyPanel.svelte'
+  import SmartPanel       from './modules/smart/SmartPanel.svelte'
+  import GrubPanel        from './modules/grub/GrubPanel.svelte'
+  import TimersPanel      from './modules/timers/TimersPanel.svelte'
   import CommandPalette   from '$lib/CommandPalette.svelte'
   import { invoke }      from '$lib/utils'
 
@@ -84,6 +87,7 @@
         { id: 'usb',       label: 'USB',       icon: Usb,           component: UsbPanel },
         { id: 'storage',   label: 'Storage',   icon: HardDrive,     component: StoragePanel },
         { id: 'mounts',    label: 'Mounts',    icon: FolderOpen,    component: MountsPanel },
+        { id: 'smart',     label: 'Disk Health', icon: Gauge,       component: SmartPanel },
         { id: 'printers',  label: 'Printers',  icon: Printer,       component: PrintersPanel },
         { id: 'camera',    label: 'Camera',    icon: Camera,        component: CameraPanel },
       ]
@@ -94,6 +98,7 @@
         { id: 'power',         label: 'Power',         icon: Zap,          component: PowerPanel },
         { id: 'security',      label: 'Security',      icon: Shield,       component: SecurityPanel },
         { id: 'startup',       label: 'Startup',       icon: LayoutGrid,   component: StartupPanel },
+        { id: 'grub',          label: 'Boot Manager',  icon: Layers,       component: GrubPanel },
         { id: 'datetime',      label: 'Date & Time',   icon: Clock,        component: DateTimePanel },
         { id: 'appearance',    label: 'Appearance',    icon: Paintbrush,   component: AppearancePanel },
         { id: 'notifications',  label: 'Notifications', icon: Bell,          component: NotificationsPanel },
@@ -111,6 +116,7 @@
         { id: 'services', label: 'Services', icon: Wrench,        component: ServicesPanel },
         { id: 'ssh',      label: 'SSH Keys', icon: KeyRound,      component: SSHPanel },
         { id: 'crontab',  label: 'Crontab',  icon: CalendarClock, component: CrontabPanel },
+        { id: 'timers',   label: 'Timers',   icon: Timer,         component: TimersPanel },
       ]
     },
   ]

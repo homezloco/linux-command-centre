@@ -7,7 +7,7 @@
 
 'use strict'
 
-const { execFileSync, execSync } = require('child_process')
+const { execFileSync, execSync, spawnSync } = require('child_process')
 const { writeFileSync, readdirSync, existsSync, readFileSync } = require('fs')
 
 const [, , operation, ...args] = process.argv
@@ -118,7 +118,7 @@ const ops = {
   },
 
   'service-action'(action, service) {
-    if (!service || !/^[a-zA-Z0-9@._-]+\.service$/.test(service)) throw new Error('Invalid service name')
+    if (!service || !/^[a-zA-Z0-9@._-]+\.(service|timer)$/.test(service)) throw new Error('Invalid service/timer name')
     if (!['start', 'stop', 'enable', 'disable', 'restart'].includes(action)) throw new Error('Invalid action')
     execFileSync('systemctl', [action, service])
     console.log(`systemctl ${action} ${service}`)
@@ -245,6 +245,18 @@ const ops = {
     }
     writeFileSync('/etc/hosts', content, 'utf8')
     console.log('/etc/hosts updated')
+  },
+
+  'smart-info'(device) {
+    if (!device || !/^\/dev\/[a-zA-Z0-9]+$/.test(device)) throw new Error('Invalid device path')
+    const result = spawnSync('smartctl', ['--json=c', '-a', device], { encoding: 'utf8' })
+    if (result.error) {
+      if (result.error.code === 'ENOENT') throw new Error('smartctl not found — install with: sudo apt install smartmontools')
+      throw result.error
+    }
+    const output = result.stdout || ''
+    if (!output || !output.includes('{')) throw new Error(result.stderr?.trim() || 'No SMART data returned')
+    process.stdout.write(output)
   },
 
   'resolv-write'(tmpPath) {
