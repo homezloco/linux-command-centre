@@ -1435,58 +1435,57 @@ export async function registerIpcHandlers(): Promise<void> {
 
   async function getSshStatus() {
     try {
-      // "Installed" = binary present OR dpkg reports it installed
-      const sshdBin = await run('which sshd 2>/dev/null').catch(() => '')
-      const dpkgOut = await run('dpkg -l openssh-server 2>/dev/null').catch(() => '')
-      const installed = sshdBin.trim().length > 0 || /^ii\s+openssh-server/m.test(dpkgOut)
+      // Installed: check binary paths directly (Electron may not have /usr/sbin in PATH)
+      const sshdBin = await run('ls /usr/sbin/sshd /sbin/sshd 2>/dev/null | head -1').catch(() => '')
+      const dpkgOut = await run('dpkg-query -W -f=\'${Status}\' openssh-server 2>/dev/null').catch(() => '')
+      const installed = sshdBin.trim().length > 0 || dpkgOut.includes('install ok installed')
 
-      const serviceOut = await run('systemctl status sshd 2>/dev/null || systemctl status ssh 2>/dev/null').catch(() => '')
-      const running = serviceOut.includes('Active: active (running)')
+      if (!installed) return { installed: false, running: false, port: 22, passwordAuth: true, rootLogin: false }
+
+      const activeOut = await run('systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null').catch(() => '')
+      const running = activeOut.trim() === 'active'
 
       let port = 22
-      let passwordAuth = true
-      let rootLogin = true
+      let passwordAuth: boolean | null = null
+      let rootLogin = false
 
-      try {
-        const sshConfig = await run('sshd -T 2>/dev/null || cat /etc/ssh/sshd_config 2>/dev/null').catch(() => '')
-        const portMatch = sshConfig.match(/^port\s+(\d+)/mi)
-        if (portMatch) port = parseInt(portMatch[1], 10)
+      const sshConfig = await readFile('/etc/ssh/sshd_config', 'utf8').catch(() => '')
+      const portMatch = sshConfig.match(/^port\s+(\d+)/mi)
+      if (portMatch) port = parseInt(portMatch[1], 10)
 
-        const passwordMatch = sshConfig.match(/^passwordauthentication\s+(\w+)/mi)
-        if (passwordMatch) passwordAuth = passwordMatch[1].toLowerCase() === 'yes'
+      const passwordMatch = sshConfig.match(/^passwordauthentication\s+(\w+)/mi)
+      if (passwordMatch) passwordAuth = passwordMatch[1].toLowerCase() === 'yes'
 
-        const rootMatch = sshConfig.match(/^permitrootlogin\s+(\w+)/mi)
-        if (rootMatch) {
-          rootLogin = rootMatch[1].toLowerCase() === 'yes' || rootMatch[1].toLowerCase() === 'prohibit-password'
-        }
-      } catch { /* ignore config read errors */ }
+      const rootMatch = sshConfig.match(/^permitrootlogin\s+(\w+)/mi)
+      if (rootMatch) {
+        const val = rootMatch[1].toLowerCase()
+        rootLogin = val === 'yes' || val === 'prohibit-password' || val === 'without-password'
+      }
 
-      return { installed, running, port, passwordAuth, rootLogin }
+      return { installed, running, port, passwordAuth: passwordAuth ?? true, rootLogin }
     } catch {
-      return { installed: false, running: false, port: 22, passwordAuth: true, rootLogin: true }
+      return { installed: false, running: false, port: 22, passwordAuth: true, rootLogin: false }
     }
   }
 
   async function getEncryptionStatus() {
     try {
-      const cryptOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT -J 2>/dev/null').catch(() => '')
+      const cryptOut = await run('lsblk -o NAME,TYPE,FSTYPE -J 2>/dev/null').catch(() => '')
       const devices: { name: string; type: string; encrypted: boolean }[] = []
 
       if (cryptOut.startsWith('{')) {
         const parsed = JSON.parse(cryptOut)
         const checkBlock = (dev: { name: string; type: string; fstype?: string; children?: unknown[] }) => {
-          // Skip loop devices (snap mounts, AppImages, etc.)
           if (dev.type === 'loop') return
           const isCrypt = dev.fstype === 'crypto_LUKS' || dev.type === 'crypt'
-          if (dev.type !== 'loop') {
-            devices.push({ name: dev.name, type: dev.type, encrypted: isCrypt })
-          }
+          // Only add to list if this device itself is encrypted
+          if (isCrypt) devices.push({ name: dev.name, type: dev.type, encrypted: true })
           if (dev.children) (dev.children as typeof dev[]).forEach(checkBlock)
         }
         parsed.blockdevices?.forEach(checkBlock)
       } else {
-        // Fallback: text lsblk, skip loop lines
-        const textOut = await run('lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT').catch(() => '')
+        // Fallback: text lsblk
+        const textOut = await run('lsblk -o NAME,TYPE,FSTYPE').catch(() => '')
         for (const line of textOut.split('\n')) {
           if (!line.trim() || line.includes(' loop ')) continue
           if (line.includes('crypt') || line.includes('LUKS')) {
@@ -1496,7 +1495,7 @@ export async function registerIpcHandlers(): Promise<void> {
         }
       }
 
-      const encrypted = devices.some(d => d.encrypted)
+      const encrypted = devices.length > 0
       return { encrypted, devices }
     } catch {
       return { encrypted: false, devices: [] }
