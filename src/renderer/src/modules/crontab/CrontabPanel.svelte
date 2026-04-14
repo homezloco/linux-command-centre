@@ -237,7 +237,7 @@
             { label: 'Day/Week',   bind: addDow,     setter: (v: string) => addDow    = v  },
           ] as field}
             <div class="space-y-1">
-              <label class="text-[10px] text-muted-foreground">{field.label}</label>
+              <span class="text-[10px] text-muted-foreground">{field.label}</span>
               <input
                 value={field.bind}
                 oninput={(e) => field.setter((e.target as HTMLInputElement).value)}
