@@ -1833,12 +1833,15 @@ export async function registerIpcHandlers(): Promise<void> {
   } = {}) => {
     const args = ['--output=json', '--no-pager', '--reverse']
     args.push(`-n`, String(opts.lines ?? 200))
-    if (opts.unit)     args.push(`--unit=${opts.unit}`)
-    if (opts.priority !== undefined) args.push(`--priority=0..${opts.priority}`)
-    if (opts.since)    args.push(`--since=${opts.since}`)
-    if (opts.grep)     args.push(`--grep=${opts.grep}`)
+    if (opts.unit)                   args.push(`--unit=${opts.unit}`)
+    if (opts.priority !== undefined) args.push(`-p`, `0..${opts.priority}`)
+    if (opts.since)                  args.push(`--since=${opts.since}`)
+    if (opts.grep)                   args.push(`--grep=${opts.grep}`)
 
-    const out = await run(`journalctl ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`).catch(() => '')
+    const out = await run(
+      `journalctl ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
+      { maxBuffer: 8 * 1024 * 1024 }
+    ).catch(() => '')
 
     type JEntry = { pid: number | null; priority: number; unit: string; message: string; timestamp: number; identifier: string }
     const entries: JEntry[] = []
@@ -1847,14 +1850,14 @@ export async function registerIpcHandlers(): Promise<void> {
       try {
         const j = JSON.parse(line)
         entries.push({
-          pid: j._PID ? parseInt(j._PID) : null,
-          priority: parseInt(j.PRIORITY ?? '6'),
-          unit: (j._SYSTEMD_UNIT || j.UNIT || j.SYSLOG_IDENTIFIER || 'kernel').replace('.service', ''),
-          message: Array.isArray(j.MESSAGE) ? Buffer.from(j.MESSAGE).toString('utf8') : String(j.MESSAGE ?? ''),
+          pid:       j._PID ? parseInt(j._PID) : null,
+          priority:  parseInt(j.PRIORITY ?? '6'),
+          unit:      (j._SYSTEMD_UNIT || j.UNIT || j.SYSLOG_IDENTIFIER || 'kernel').replace(/\.service$/, ''),
+          message:   Array.isArray(j.MESSAGE) ? Buffer.from(j.MESSAGE).toString('utf8') : String(j.MESSAGE ?? ''),
           timestamp: Math.floor(parseInt(j.__REALTIME_TIMESTAMP ?? '0') / 1000),
-          identifier: j.SYSLOG_IDENTIFIER ?? ''
+          identifier: j.SYSLOG_IDENTIFIER ?? '',
         })
-      } catch { /* skip malformed */ }
+      } catch { /* skip malformed lines */ }
     }
     return entries
   })

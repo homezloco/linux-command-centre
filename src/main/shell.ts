@@ -22,8 +22,8 @@ export function sysexists(path: string): boolean {
 }
 
 /** Run a shell command, return stdout. Throws on non-zero exit. */
-export async function run(cmd: string): Promise<string> {
-  const { stdout } = await execAsync(cmd)
+export async function run(cmd: string, opts: { maxBuffer?: number } = {}): Promise<string> {
+  const { stdout } = await execAsync(cmd, { maxBuffer: opts.maxBuffer ?? 1024 * 1024 })
   return stdout.trim()
 }
 
