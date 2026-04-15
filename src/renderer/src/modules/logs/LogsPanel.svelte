@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Search, X, Play, Square } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type LogEntry = {
     pid: number | null; priority: number; unit: string
@@ -195,9 +197,7 @@
 
   <!-- Log entries -->
   {#if loading}
-    <div class="flex items-center justify-center h-40">
-      <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-    </div>
+    <Spinner />
   {:else if entries.length === 0}
     <div class="flex items-center justify-center h-40 text-sm text-muted-foreground">
       No log entries match the current filters

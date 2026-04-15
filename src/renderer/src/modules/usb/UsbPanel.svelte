@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Usb, HardDrive, Keyboard, Mouse, Headphones, Smartphone, Layers, MonitorSpeaker } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type UsbDevice = {
     bus: string; device: string; vendorId: string; productId: string
@@ -51,12 +53,10 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else if error}
-  <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  <Alert message={error} />
 
 {:else}
   <div class="space-y-4 max-w-2xl">

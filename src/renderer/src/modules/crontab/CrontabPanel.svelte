@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Plus, Trash2, Eye, EyeOff, Save, Clock, AlertTriangle } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type CronJob = {
     id: string
@@ -170,9 +172,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-4 max-w-2xl">
@@ -203,7 +203,7 @@
     </div>
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <!-- Add form -->

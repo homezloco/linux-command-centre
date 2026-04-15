@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, UserPlus, Trash2, Shield, ShieldOff, Terminal, Home } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type User = { username: string; fullName: string; uid: number; home: string; shell: string; sudo: boolean }
 
@@ -74,9 +76,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-4 max-w-xl">
@@ -144,7 +144,7 @@
     {/if}
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <!-- User list -->

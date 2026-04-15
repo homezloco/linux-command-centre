@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, HardDrive, AlertTriangle, CheckCircle2, XCircle } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type Disk = { name: string; size: string; model: string; tran: string }
   type SmartAttr = {
@@ -74,12 +76,10 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else if error}
-  <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  <Alert message={error} />
 
 {:else if disks.length === 0}
   <div class="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
@@ -108,9 +108,7 @@
     </div>
 
     {#if loadingSmart}
-      <div class="flex items-center justify-center h-40">
-        <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-      </div>
+      <Spinner />
 
     {:else if smartError}
       <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">

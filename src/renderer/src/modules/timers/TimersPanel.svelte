@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Play, Square, Search, Power, PowerOff } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type Timer = {
     name: string; enabled: string; active: boolean
@@ -70,9 +72,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-3 max-w-3xl">
@@ -116,7 +116,7 @@
     </div>
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <!-- Timer list -->

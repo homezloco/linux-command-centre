@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Plus, Trash2, EyeOff, Eye, AlertTriangle, Save } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type HostEntry = {
     id: string; ip: string; hostname: string; aliases: string
@@ -135,9 +137,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-4 max-w-2xl">
@@ -192,7 +192,7 @@
     {/if}
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <!-- Entries -->

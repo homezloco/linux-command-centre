@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Play, Square, RotateCcw, Search } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type Service = {
     name: string; active: string; sub: string
@@ -71,9 +73,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-3 max-w-3xl">
@@ -111,7 +111,7 @@
     </div>
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <!-- Service list -->

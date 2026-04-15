@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Save, AlertTriangle } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type GrubStatus = {
     timeout: string; default: string; cmdlineDefault: string
@@ -59,12 +61,10 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else if error && !status}
-  <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  <Alert message={error} />
 
 {:else if status}
   <div class="space-y-4 max-w-xl">
@@ -183,7 +183,7 @@
       <p class="text-xs text-green-400">{success}</p>
     {/if}
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <div class="flex justify-end">

@@ -170,33 +170,38 @@
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
   <!-- Sidebar -->
-  <aside class="w-52 flex flex-col border-r border-border bg-card shrink-0">
-    <div class="drag-region flex items-center gap-2 px-4 h-10 border-b border-border shrink-0">
-      <span class="text-xs font-semibold text-muted-foreground uppercase tracking-widest no-drag">
+  <aside class="w-52 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
+    <div class="drag-region flex items-center gap-2.5 px-4 h-11 border-b border-border shrink-0">
+      <Shield size={13} class="text-primary/70 no-drag shrink-0" />
+      <span class="text-[11px] font-semibold text-foreground/70 uppercase tracking-widest no-drag leading-none">
         Command Centre
       </span>
     </div>
 
-    <nav class="flex-1 p-2 overflow-y-auto select-none space-y-3">
+    <nav class="flex-1 py-2 px-1.5 overflow-y-auto select-none space-y-4">
       {#each groups as group}
         <div>
-          <p class="px-3 py-1 text-[10px] font-semibold text-muted-foreground/50 uppercase tracking-widest">
+          <p class="px-2.5 pb-1 pt-0.5 text-[9.5px] font-bold text-muted-foreground/40 uppercase tracking-[0.12em]">
             {group.label}
           </p>
-          <div class="space-y-0.5">
+          <div class="space-y-px">
             {#each group.items as mod}
               {@const badge = badgeFor(mod.id)}
+              {@const isActive = active === mod.id}
               <button
                 onclick={() => active = mod.id}
-                class="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors
-                       {active === mod.id
-                         ? 'bg-primary/10 text-primary font-medium'
-                         : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
+                class="relative w-full flex items-center gap-2.5 px-2.5 py-[5px] rounded-[5px] text-[13px] transition-colors
+                       {isActive
+                         ? 'bg-primary/[0.12] text-primary font-medium'
+                         : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground'}"
               >
-                <mod.icon size={14} />
-                <span class="flex-1 text-left">{mod.label}</span>
+                {#if isActive}
+                  <span class="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-primary"></span>
+                {/if}
+                <mod.icon size={14} class="shrink-0" />
+                <span class="flex-1 text-left truncate">{mod.label}</span>
                 {#if badge}
-                  <span class="text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none
+                  <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
                                {badgeStyle(mod.id)}">
                     {badge}
                   </span>
@@ -208,17 +213,27 @@
       {/each}
     </nav>
 
-    <div class="p-3 border-t border-border shrink-0">
-      <p class="text-[10px] text-muted-foreground">Linux Command Centre</p>
-      <p class="text-[10px] text-muted-foreground/50">v{appVersion} · {appOs}</p>
+    <div class="px-3 py-2.5 border-t border-border shrink-0 flex items-center gap-2">
+      <div class="w-5 h-5 rounded bg-primary/15 flex items-center justify-center shrink-0">
+        <Server size={10} class="text-primary/80" />
+      </div>
+      <div class="min-w-0">
+        <p class="text-[10px] font-medium text-foreground/60 truncate">{appOs}</p>
+        <p class="text-[9.5px] text-muted-foreground/40">v{appVersion}</p>
+      </div>
     </div>
   </aside>
 
   <!-- Main panel -->
   <main class="flex-1 overflow-y-auto bg-background">
-    <div class="drag-region h-10 border-b border-border flex items-center px-5 shrink-0">
-      <span class="text-sm font-medium no-drag flex-1">{current.label}</span>
-      <kbd class="no-drag text-[10px] text-muted-foreground/40 border border-border/50 rounded px-1.5 py-0.5 font-mono">Ctrl K</kbd>
+    <div class="drag-region h-11 border-b border-border flex items-center gap-3 px-5 shrink-0">
+      <div class="no-drag flex items-center gap-2.5 flex-1 min-w-0">
+        <div class="w-6 h-6 rounded-md bg-card border border-border flex items-center justify-center shrink-0">
+          <current.icon size={13} class="text-primary/80" />
+        </div>
+        <span class="text-sm font-semibold text-foreground truncate">{current.label}</span>
+      </div>
+      <kbd class="no-drag text-[10px] text-muted-foreground/30 border border-border/40 rounded px-1.5 py-0.5 font-mono shrink-0">⌃K</kbd>
     </div>
     <div class="p-5">
       {#key active}

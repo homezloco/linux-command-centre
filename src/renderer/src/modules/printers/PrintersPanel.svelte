@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, Printer, Star, Trash2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type PrinterItem = { name: string; state: string; uri: string; isDefault: boolean }
   type PrinterStatus = { printers: PrinterItem[]; default: string | null }
@@ -50,9 +52,7 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else}
   <div class="space-y-4 max-w-xl">
@@ -72,7 +72,7 @@
     </div>
 
     {#if error}
-      <p class="text-xs text-destructive">{error}</p>
+      <Alert message={error} />
     {/if}
 
     {#if !status || status.printers.length === 0}

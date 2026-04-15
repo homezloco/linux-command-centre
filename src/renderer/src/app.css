@@ -4,47 +4,98 @@
 
 @layer base {
   :root {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 6%;
-    --card-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 84% 60%;
-    --ring: 217 91% 60%;
-    --radius: 0.5rem;
+    --background: 224 14% 4%;
+    --foreground: 210 16% 96%;
+    --card: 224 14% 7%;
+    --card-foreground: 210 16% 96%;
+    --border: 224 10% 17%;
+    --input: 224 10% 17%;
+    --primary: 213 93% 63%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 224 10% 13%;
+    --secondary-foreground: 210 16% 96%;
+    --muted: 224 10% 13%;
+    --muted-foreground: 220 9% 58%;
+    --accent: 224 10% 13%;
+    --accent-foreground: 210 16% 96%;
+    --destructive: 0 82% 62%;
+    --ring: 213 93% 63%;
+    --radius: 0.6rem;
     --status-ok: 142 71% 45%;
     --status-warn: 38 92% 50%;
-    --status-fail: 0 84% 60%;
+    --status-fail: 0 82% 62%;
+    /* Sidebar is fractionally darker than card for depth */
+    --sidebar-bg: 224 16% 5.5%;
   }
 }
 
 @layer base {
   * { @apply border-border; }
+
   body {
     @apply bg-background text-foreground;
-    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Slim, themed scrollbar */
+  ::-webkit-scrollbar           { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track     { background: transparent; }
+  ::-webkit-scrollbar-thumb     { background: hsl(var(--border)); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(220 9% 32%); }
+  ::-webkit-scrollbar-corner    { background: transparent; }
+
+  /* Selection colour matches primary */
+  ::selection {
+    background: hsl(var(--primary) / 0.22);
+    color: hsl(var(--foreground));
   }
 }
 
 /* Drag region for custom title bar */
-.drag-region {
-  -webkit-app-region: drag;
-}
-.no-drag {
-  -webkit-app-region: no-drag;
+.drag-region  { -webkit-app-region: drag; }
+.no-drag      { -webkit-app-region: no-drag; }
+
+/* uPlot font */
+.uplot, .uplot *, .uplot canvas { @apply font-sans; }
+
+/* ── Focus ring ────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.45);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) - 2px);
 }
 
-/* uPlot overrides */
-.uplot, .uplot *, .uplot canvas {
-  @apply font-sans;
+/* ── Range inputs ──────────────────────────────────────────────────────────── */
+input[type='range'] {
+  accent-color: hsl(var(--primary));
+  cursor: pointer;
+  height: 4px;
+  border-radius: 99px;
 }
+
+/* ── Text/select/textarea focus glow ──────────────────────────────────────── */
+input:not([type='range']):not([type='checkbox']):not([type='radio']):not([type='search']),
+input[type='search'],
+textarea,
+select {
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+input:not([type='range']):not([type='checkbox']):not([type='radio']):focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  box-shadow: 0 0 0 1.5px hsl(var(--primary) / 0.25);
+  border-color: hsl(var(--primary) / 0.4) !important;
+}
+
+/* ── Button press micro-interaction ───────────────────────────────────────── */
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* ── Status dot utilities ─────────────────────────────────────────────────── */
+.dot-ok   { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-ok))]; }
+.dot-warn { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-warn))]; }
+.dot-fail { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-fail))]; }

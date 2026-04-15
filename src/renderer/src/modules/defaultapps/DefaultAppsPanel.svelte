@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { RefreshCw, ChevronDown, Check } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type AppOption = { id: string; name: string }
   type Category  = { id: string; label: string; current: string; currentName: string; apps: AppOption[] }
@@ -32,12 +34,10 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else if error && !categories.length}
-  <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  <Alert message={error} />
 
 {:else}
   <div class="space-y-1.5 max-w-xl">

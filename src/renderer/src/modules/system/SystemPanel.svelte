@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type SystemStatus = {
     hostname: string; osName: string; kernel: string; arch: string
@@ -92,12 +94,10 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-40">
-    <RefreshCw size={20} class="animate-spin text-muted-foreground" />
-  </div>
+  <Spinner />
 
 {:else if error}
-  <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+  <Alert message={error} />
 
 {:else if status}
   {@const memPct = Math.round(status.memory.used / status.memory.total * 100)}
