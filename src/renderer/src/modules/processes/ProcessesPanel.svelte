@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, X, AlertTriangle } from 'lucide-svelte'
+  import { RefreshCw, X, AlertTriangle, Search } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -15,6 +15,7 @@
   let refreshing = $state(false)
   let error = $state('')
   let sortBy = $state<'cpu' | 'mem'>('cpu')
+  let query  = $state('')
   let killing = $state<number | null>(null)
   let confirmKill = $state<{ pid: number; name: string; signal: 'TERM' | 'KILL' } | null>(null)
   let interval: ReturnType<typeof setInterval> | undefined
@@ -57,6 +58,14 @@
     if (bytes >= 1e6) return (bytes / 1e6).toFixed(0) + ' MB'
     return (bytes / 1e3).toFixed(0) + ' KB'
   }
+
+  const filtered = $derived(
+    query.trim()
+      ? procs.filter(p => p.name.toLowerCase().includes(query.toLowerCase()) ||
+                          p.command.toLowerCase().includes(query.toLowerCase()) ||
+                          String(p.pid).includes(query))
+      : procs
+  )
 
   $effect(() => {
     void sortBy
@@ -109,38 +118,41 @@
   <div class="space-y-3 max-w-2xl">
 
     <!-- Controls -->
-    <div class="flex items-center justify-between">
-      <div class="flex rounded-lg bg-secondary p-0.5 gap-0.5">
-        <button
-          onclick={() => sortBy = 'cpu'}
-          class="px-3 py-1 rounded-md text-xs font-medium transition-colors
-                 {sortBy === 'cpu' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        >
-          CPU
-        </button>
-        <button
-          onclick={() => sortBy = 'mem'}
-          class="px-3 py-1 rounded-md text-xs font-medium transition-colors
-                 {sortBy === 'mem' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-        >
-          Memory
-        </button>
+    <div class="flex items-center gap-2">
+      <!-- Search -->
+      <div class="relative flex-1">
+        <Search size={13} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <input
+          bind:value={query}
+          placeholder="Filter by name, command or PID…"
+          class="w-full pl-8 pr-3 py-1.5 rounded-md border border-border bg-secondary/50
+                 text-sm placeholder:text-muted-foreground/50 focus:outline-none"
+        />
       </div>
-      <div class="flex items-center gap-2">
-        {#if error}
-          <Alert message={error} />
-        {/if}
-        <button
-          onclick={() => load(true)}
-          disabled={refreshing}
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                 bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+      <!-- Sort toggle -->
+      <div class="flex rounded-md border border-border overflow-hidden text-xs shrink-0">
+        {#each (['cpu', 'mem'] as const) as s}
+          <button
+            onclick={() => sortBy = s}
+            class="px-3 py-1.5 capitalize transition-colors
+                   {sortBy === s ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary text-muted-foreground'}"
+          >
+            {s === 'cpu' ? 'CPU' : 'Memory'}
+          </button>
+        {/each}
       </div>
+      <!-- Refresh -->
+      <button
+        onclick={() => load(true)}
+        disabled={refreshing}
+        aria-label="Refresh"
+        class="p-1.5 rounded-md hover:bg-secondary text-muted-foreground disabled:opacity-50 shrink-0"
+      >
+        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+      </button>
     </div>
+
+    {#if error}<Alert message={error} />{/if}
 
     <!-- Table header -->
     <div class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 px-3 py-1.5 text-xs text-muted-foreground font-medium">
@@ -153,7 +165,7 @@
 
     <!-- Process rows -->
     <div class="space-y-1">
-      {#each procs as proc (proc.pid)}
+      {#each filtered as proc (proc.pid)}
         <div class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 items-center
                     rounded-lg border border-border bg-card px-3 py-2
                     hover:border-border/80 transition-colors group">
@@ -207,6 +219,12 @@
       {/each}
     </div>
 
-    <p class="text-xs text-muted-foreground text-center">Top 50 processes · refreshes every 4s</p>
+    <p class="text-xs text-muted-foreground text-center">
+      {#if query}
+        {filtered.length} of {procs.length} processes
+      {:else}
+        Top {procs.length} by {sortBy} · refreshes every 4s
+      {/if}
+    </p>
   </div>
 {/if}

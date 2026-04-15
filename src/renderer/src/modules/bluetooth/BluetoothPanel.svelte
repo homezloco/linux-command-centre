@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Bluetooth, BluetoothOff, RotateCw, Headphones, Smartphone, Keyboard, Mouse, Speaker, Search, Trash2 } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type Device    = { mac: string; name: string; connected: boolean; type: string }
   type BtStatus  = { blocked: boolean; devices: Device[] }
@@ -117,10 +119,11 @@
   }
 </script>
 
+{#if loading}
+  <Spinner />
+{:else}
 <div class="max-w-sm space-y-3">
-  {#if loading}
-    <div class="h-32 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
-  {:else if status}
+  {#if status}
 
     <!-- Status + toggle -->
     <div class="rounded-xl border border-border bg-card p-4">
@@ -140,7 +143,7 @@
           <span class={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${status.blocked ? '' : 'translate-x-5'}`}></span>
         </button>
       </div>
-      {#if error}<p class="text-xs text-destructive mt-2">{error}</p>{/if}
+      {#if error}<div class="mt-2"><Alert message={error} /></div>{/if}
     </div>
 
     {#if !status.blocked}
@@ -298,3 +301,4 @@
     {/if}
   {/if}
 </div>
+{/if}

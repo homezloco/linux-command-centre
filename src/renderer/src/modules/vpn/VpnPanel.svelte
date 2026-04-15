@@ -46,23 +46,18 @@
 {:else}
   <div class="space-y-4 max-w-2xl">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <h2 class="text-sm font-medium text-muted-foreground">VPN Connections</h2>
+    <div class="flex items-center justify-end">
       <button
         onclick={() => load(true)}
         disabled={refreshing}
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-               bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50"
+        aria-label="Refresh"
+        class="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
       >
-        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
-        Refresh
+        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
       </button>
     </div>
 
-    {#if error}
-      <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
-    {/if}
+    {#if error}<Alert message={error} />{/if}
 
     {#if connections.length === 0}
       <div class="rounded-xl border border-border bg-card p-8 text-center space-y-2">

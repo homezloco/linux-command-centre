@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Wifi, WifiOff, Lock, Unlock, RefreshCw, X, Check, Trash2, Bookmark, Shield } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type WifiStatus = { blocked: boolean; ssid: string | null; signal: number | null; security: string | null }
   type Network    = { ssid: string; signal: number; security: string; bssid: string; active: boolean }
@@ -108,6 +110,9 @@
   }
 </script>
 
+{#if loading}
+  <Spinner />
+{:else}
 <div class="max-w-md space-y-3">
 
   <!-- Header: status + toggle -->
@@ -141,7 +146,7 @@
         </button>
       </div>
     </div>
-    {#if error}<p class="text-xs text-destructive mt-2">{error}</p>{/if}
+    {#if error}<div class="mt-2"><Alert message={error} /></div>{/if}
   </div>
   {/if}
 
@@ -290,3 +295,4 @@
   {/if}
 
 </div>
+{/if}

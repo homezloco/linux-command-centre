@@ -3,6 +3,7 @@
   import { subscribeStream } from '$stores/stream'
   import { tempColor } from '$lib/utils'
   import { Wind, Cpu, Thermometer, AlertTriangle, Activity } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
 
   type ProcessInfo = { name: string; pid: number; cpu: number; mem: number }
 
@@ -52,9 +53,7 @@
 <div class="space-y-4 max-w-2xl">
 
   {#if !snapshot}
-    <div class="flex items-center justify-center h-48 text-muted-foreground text-sm">
-      Waiting for sensor data…
-    </div>
+    <Spinner height="h-48" />
   {:else}
 
     <!-- Top row: package temp + fan + freq -->

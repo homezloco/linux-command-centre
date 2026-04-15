@@ -76,17 +76,15 @@
 {:else if status}
   <div class="space-y-4 max-w-2xl">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <h2 class="text-sm font-medium text-muted-foreground">Network Interfaces</h2>
+    <!-- Refresh -->
+    <div class="flex justify-end">
       <button
         onclick={() => load(true)}
         disabled={refreshing}
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-               bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50"
+        aria-label="Refresh"
+        class="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
       >
-        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
-        Refresh
+        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
       </button>
     </div>
 
@@ -176,29 +174,33 @@
 
     <!-- Gateway & DNS -->
     <div class="grid grid-cols-2 gap-3">
-      <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-        <div class="flex items-center gap-2 text-muted-foreground mb-2">
+      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0 mt-0.5">
           <Globe size={13} />
-          <span class="text-xs font-medium">Default Gateway</span>
         </div>
-        {#if status.gateway}
-          <p class="text-sm font-mono font-medium">{status.gateway}</p>
-        {:else}
-          <p class="text-xs text-muted-foreground">None</p>
-        {/if}
+        <div class="min-w-0">
+          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Gateway</p>
+          {#if status.gateway}
+            <p class="text-sm font-mono font-medium mt-0.5">{status.gateway}</p>
+          {:else}
+            <p class="text-xs text-muted-foreground mt-0.5">None</p>
+          {/if}
+        </div>
       </div>
-      <div class="rounded-xl border border-border bg-card p-3">
-        <div class="flex items-center gap-2 text-muted-foreground mb-2">
+      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-md bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0 mt-0.5">
           <Server size={13} />
-          <span class="text-xs font-medium">DNS Servers</span>
         </div>
-        {#if status.dnsServers.length > 0}
-          {#each status.dnsServers as dns}
-            <p class="text-xs font-mono">{dns}</p>
-          {/each}
-        {:else}
-          <p class="text-xs text-muted-foreground">None found</p>
-        {/if}
+        <div class="min-w-0">
+          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">DNS</p>
+          {#if status.dnsServers.length > 0}
+            {#each status.dnsServers as dns}
+              <p class="text-xs font-mono mt-0.5">{dns}</p>
+            {/each}
+          {:else}
+            <p class="text-xs text-muted-foreground mt-0.5">None found</p>
+          {/if}
+        </div>
       </div>
     </div>
 

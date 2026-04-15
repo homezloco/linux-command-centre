@@ -106,17 +106,22 @@
 
   <div class="space-y-4 max-w-2xl">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="text-base font-semibold">{status.hostname}</h2>
-        <p class="text-xs text-muted-foreground">{status.osName}</p>
+    <!-- Header banner -->
+    <div class="rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <Server size={15} />
+        </div>
+        <div>
+          <p class="text-sm font-semibold leading-tight">{status.hostname}</p>
+          <p class="text-xs text-muted-foreground leading-tight">{status.osName}</p>
+        </div>
       </div>
       <button
         onclick={() => load(true)}
         disabled={refreshing}
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-               bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium
+               text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
       >
         <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
         Refresh
@@ -125,26 +130,34 @@
 
     <!-- Info row -->
     <div class="grid grid-cols-3 gap-3">
-      <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-        <div class="flex items-center gap-2 text-muted-foreground">
-          <Layers size={13} /><span class="text-xs">Kernel</span>
+      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-md bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0 mt-0.5">
+          <Layers size={13} />
         </div>
-        <p class="text-sm font-medium truncate">{status.kernel}</p>
-        <p class="text-xs text-muted-foreground">{status.arch}</p>
+        <div class="min-w-0">
+          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Kernel</p>
+          <p class="text-sm font-medium truncate leading-tight mt-0.5">{status.kernel}</p>
+          <p class="text-xs text-muted-foreground">{status.arch}</p>
+        </div>
       </div>
-      <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-        <div class="flex items-center gap-2 text-muted-foreground">
-          <Clock size={13} /><span class="text-xs">Uptime</span>
+      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-md bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0 mt-0.5">
+          <Clock size={13} />
         </div>
-        <p class="text-sm font-medium">{uptimeStr(status.uptime)}</p>
-        <p class="text-xs text-muted-foreground">&nbsp;</p>
+        <div>
+          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Uptime</p>
+          <p class="text-sm font-medium leading-tight mt-0.5">{uptimeStr(status.uptime)}</p>
+        </div>
       </div>
-      <div class="rounded-xl border border-border bg-card p-3 space-y-1">
-        <div class="flex items-center gap-2 text-muted-foreground">
-          <Activity size={13} /><span class="text-xs">Processes</span>
+      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
+        <div class="w-7 h-7 rounded-md bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+          <Activity size={13} />
         </div>
-        <p class="text-sm font-medium">{status.processes}</p>
-        <p class="text-xs text-muted-foreground">running</p>
+        <div>
+          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Processes</p>
+          <p class="text-sm font-medium leading-tight mt-0.5">{status.processes}</p>
+          <p class="text-xs text-muted-foreground">running</p>
+        </div>
       </div>
     </div>
 
@@ -191,24 +204,28 @@
         </div>
       {/if}
 
-      <div class="flex gap-4 text-xs text-muted-foreground">
-        <span>Load 1m: <span class="text-foreground font-medium">{status.load.one.toFixed(2)}</span></span>
-        <span>5m: <span class="text-foreground font-medium">{status.load.five.toFixed(2)}</span></span>
-        <span>15m: <span class="text-foreground font-medium">{status.load.fifteen.toFixed(2)}</span></span>
+      <!-- Load average -->
+      <div class="grid grid-cols-3 gap-2">
+        {#each [['1m', status.load.one], ['5m', status.load.five], ['15m', status.load.fifteen]] as [label, val]}
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5 flex items-center justify-between">
+            <span class="text-[10px] text-muted-foreground">Load {label}</span>
+            <span class="text-xs font-medium tabular-nums">{(val as number).toFixed(2)}</span>
+          </div>
+        {/each}
       </div>
 
       <!-- Per-core grid -->
       {#if status.cpu.coreUsages && status.cpu.coreUsages.length > 0}
         <div class="border-t border-border pt-3">
-          <p class="text-xs text-muted-foreground mb-2">Per-core usage</p>
-          <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fill, minmax(60px, 1fr))">
+          <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-2">Per-core</p>
+          <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fill, minmax(58px, 1fr))">
             {#each status.cpu.coreUsages as pct, i}
-              <div class="rounded-md bg-secondary/50 p-1.5 space-y-1">
+              <div class="rounded-md bg-secondary/40 p-1.5 space-y-1.5">
                 <div class="flex items-center justify-between">
-                  <span class="text-[9px] text-muted-foreground/70">C{i}</span>
-                  <span class="text-[10px] font-medium tabular-nums {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-yellow-400' : 'text-foreground'}">{pct}%</span>
+                  <span class="text-[9px] text-muted-foreground/60 font-medium">C{i}</span>
+                  <span class="text-[10px] font-semibold tabular-nums {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-yellow-400' : 'text-foreground/80'}">{pct}%</span>
                 </div>
-                <div class="h-1 rounded-full bg-secondary overflow-hidden">
+                <div class="h-[3px] rounded-full bg-secondary overflow-hidden">
                   <div class="h-full rounded-full transition-all duration-500 {pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-yellow-500' : 'bg-primary'}"
                        style="width: {pct}%"></div>
                 </div>

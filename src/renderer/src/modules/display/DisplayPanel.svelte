@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Sun, Moon, Monitor, ChevronDown, Maximize, Star } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type DisplayMode = {
     resolution: string
@@ -94,10 +96,12 @@
   onMount(load)
 </script>
 
+{#if loading}
+  <Spinner />
+{:else if error && !status}
+  <Alert message={error} />
+{:else if status}
 <div class="max-w-lg space-y-3">
-  {#if loading}
-    <div class="h-32 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
-  {:else if status}
 
     <!-- Monitors -->
     {#if status.monitors.length > 0}
@@ -108,8 +112,10 @@
           {@const selectedRate = selectedRates[monitor.name] || availableRates[0] || monitor.refreshRate}
           <div class="rounded-xl border border-border bg-card p-4 space-y-3">
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <Monitor size={16} class="text-muted-foreground" />
+              <div class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
+                  <Monitor size={14} />
+                </div>
                 <span class="text-sm font-medium">{monitor.name}</span>
                 {#if monitor.primary}
                   <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">Primary</span>
@@ -165,8 +171,10 @@
     <!-- Scaling -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2 text-sm font-medium">
-          <Maximize size={15} class="text-muted-foreground" />
+        <div class="flex items-center gap-2.5 text-sm font-medium">
+          <div class="w-7 h-7 rounded-md bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0">
+            <Maximize size={13} />
+          </div>
           Scaling
         </div>
         <span class="text-xs text-muted-foreground">{status.fractionalScale.toFixed(1)}x</span>
@@ -189,8 +197,10 @@
     <!-- Brightness -->
     {#if status.brightness !== null}
     <div class="rounded-xl border border-border bg-card p-5 space-y-3">
-      <div class="flex items-center gap-2 text-sm font-medium">
-        <Sun size={15} />
+      <div class="flex items-center gap-2.5 text-sm font-medium">
+        <div class="w-7 h-7 rounded-md bg-yellow-500/10 text-yellow-400 flex items-center justify-center shrink-0">
+          <Sun size={13} />
+        </div>
         Brightness — {status.brightness}%
       </div>
       <input type="range" min="1" max="100" step="1" value={status.brightness}
@@ -207,8 +217,10 @@
     <!-- Night Light -->
     <div class="rounded-xl border border-border bg-card p-5 space-y-4">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2 text-sm font-medium">
-          <Moon size={15} />
+        <div class="flex items-center gap-2.5 text-sm font-medium">
+          <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0">
+            <Moon size={13} />
+          </div>
           Night light
         </div>
         <button onclick={toggleNightLight} aria-label="Toggle night light"
@@ -234,6 +246,6 @@
       {/if}
     </div>
 
-    {#if error}<p class="text-xs text-destructive">{error}</p>{/if}
-  {/if}
+    {#if error}<Alert message={error} />{/if}
 </div>
+{/if}

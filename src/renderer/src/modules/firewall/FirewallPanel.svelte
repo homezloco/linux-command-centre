@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '$lib/utils'
   import { ShieldCheck, RefreshCw, Plus, Trash2, Lock, AlertTriangle } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type Rule = { num: number; to: string; action: string; from: string; v6: boolean }
 
@@ -64,9 +65,7 @@
         <p class="text-sm font-medium">UFW Firewall Rules</p>
         <p class="text-xs text-muted-foreground mt-1">Loading rules requires administrator authentication.</p>
       </div>
-      {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-      {/if}
+      {#if error}<Alert message={error} />{/if}
       <button
         onclick={loadRules}
         disabled={loading}
@@ -98,9 +97,7 @@
       </button>
     </div>
 
-    {#if error}
-      <p class="text-xs text-destructive">{error}</p>
-    {/if}
+    {#if error}<Alert message={error} />{/if}
 
     <!-- Add rule -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -141,9 +138,7 @@
           Add
         </button>
       </div>
-      {#if addError}
-        <p class="text-xs text-destructive">{addError}</p>
-      {/if}
+      {#if addError}<Alert message={addError} />{/if}
     </div>
 
     <!-- Rules table -->

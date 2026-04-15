@@ -131,39 +131,46 @@
       {/if}
 
       <div class="grid grid-cols-2 gap-3 text-sm">
-        <div class="rounded-lg bg-secondary/50 p-3">
-          <p class="text-muted-foreground text-xs mb-1">Health</p>
-          <p class="font-medium">{info.health || '—'}</p>
+        <div class="rounded-lg bg-secondary/40 p-3 flex items-start gap-2.5">
+          <div class="w-6 h-6 rounded-md bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Gauge size={11} />
+          </div>
+          <div>
+            <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Health</p>
+            <p class="font-medium text-sm mt-0.5">{info.health || '—'}</p>
+          </div>
         </div>
-        <div class="rounded-lg bg-secondary/50 p-3">
-          <p class="text-muted-foreground text-xs mb-1">Charge limit</p>
-          <p class="font-medium">{info.threshold}%</p>
+        <div class="rounded-lg bg-secondary/40 p-3 flex items-start gap-2.5">
+          <div class="w-6 h-6 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0 mt-0.5">
+            <Zap size={11} />
+          </div>
+          <div>
+            <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Charge limit</p>
+            <p class="font-medium text-sm mt-0.5">{info.threshold}%</p>
+          </div>
         </div>
       </div>
 
       <!-- Extended stats -->
-      <div class="grid grid-cols-3 gap-2 text-xs">
-        <div class="rounded bg-secondary/30 p-2 text-center">
-          <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
-            <Zap size={11} />
-            Power
-          </p>
-          <p class="font-medium">{info.powerNow}W</p>
+      <div class="grid grid-cols-3 gap-2">
+        <div class="rounded-md bg-secondary/30 px-2.5 py-2 flex items-center justify-between">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1">
+            <Zap size={10} /> Power
+          </span>
+          <span class="text-xs font-medium">{info.powerNow}W</span>
         </div>
-        <div class="rounded bg-secondary/30 p-2 text-center">
-          <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
-            <RotateCw size={11} />
-            Cycles
-          </p>
-          <p class="font-medium">{info.cycleCount.toLocaleString()}</p>
+        <div class="rounded-md bg-secondary/30 px-2.5 py-2 flex items-center justify-between">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1">
+            <RotateCw size={10} /> Cycles
+          </span>
+          <span class="text-xs font-medium">{info.cycleCount.toLocaleString()}</span>
         </div>
         {#if info.wearLevel !== null}
-          <div class="rounded bg-secondary/30 p-2 text-center">
-            <p class="text-muted-foreground mb-0.5 flex items-center justify-center gap-1">
-              <Gauge size={11} />
-              Wear
-            </p>
-            <p class="font-medium {info.wearLevel > 20 ? 'text-yellow-400' : info.wearLevel > 50 ? 'text-red-400' : 'text-green-400'}">{info.wearLevel}%</p>
+          <div class="rounded-md bg-secondary/30 px-2.5 py-2 flex items-center justify-between">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1">
+              <Gauge size={10} /> Wear
+            </span>
+            <span class="text-xs font-medium {info.wearLevel > 50 ? 'text-red-400' : info.wearLevel > 20 ? 'text-yellow-400' : 'text-green-400'}">{info.wearLevel}%</span>
           </div>
         {/if}
       </div>

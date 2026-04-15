@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Mouse, CheckCircle, XCircle, RefreshCw, Hand, ScrollText, Gauge, Type } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type TouchpadDevice = { name: string; id: string }
 
@@ -50,10 +52,10 @@
   onMount(load)
 </script>
 
-<div class="max-w-md space-y-3">
-  {#if loading}
-    <div class="h-48 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
-  {:else if status}
+{#if loading}
+  <Spinner height="h-48" />
+{:else if status}
+  <div class="max-w-md space-y-3">
 
     <!-- Detected Devices -->
     {#if status.devices.length > 0}
@@ -114,11 +116,11 @@
             <span class="text-sm">Tap to click</span>
           </div>
           <button
-            onclick={() => setSetting('tapToClick', !status.tapToClick)}
+            onclick={() => setSetting('tapToClick', !status!.tapToClick)}
             aria-label="Toggle tap to click"
-            class="relative w-11 h-6 rounded-full transition-colors {status.tapToClick ? 'bg-primary' : 'bg-secondary border border-border'}"
+            class="relative w-11 h-6 rounded-full transition-colors {status!.tapToClick ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
-            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.tapToClick ? 'translate-x-5' : ''}"></span>
+            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status!.tapToClick ? 'translate-x-5' : ''}"></span>
           </button>
         </div>
 
@@ -129,11 +131,11 @@
             <span class="text-sm">Natural scrolling</span>
           </div>
           <button
-            onclick={() => setSetting('naturalScrolling', !status.naturalScrolling)}
+            onclick={() => setSetting('naturalScrolling', !status!.naturalScrolling)}
             aria-label="Toggle natural scrolling"
-            class="relative w-11 h-6 rounded-full transition-colors {status.naturalScrolling ? 'bg-primary' : 'bg-secondary border border-border'}"
+            class="relative w-11 h-6 rounded-full transition-colors {status!.naturalScrolling ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
-            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.naturalScrolling ? 'translate-x-5' : ''}"></span>
+            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status!.naturalScrolling ? 'translate-x-5' : ''}"></span>
           </button>
         </div>
 
@@ -144,11 +146,11 @@
             <span class="text-sm">Two-finger scroll</span>
           </div>
           <button
-            onclick={() => setSetting('twoFingerScroll', !status.twoFingerScroll)}
+            onclick={() => setSetting('twoFingerScroll', !status!.twoFingerScroll)}
             aria-label="Toggle two-finger scroll"
-            class="relative w-11 h-6 rounded-full transition-colors {status.twoFingerScroll ? 'bg-primary' : 'bg-secondary border border-border'}"
+            class="relative w-11 h-6 rounded-full transition-colors {status!.twoFingerScroll ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
-            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.twoFingerScroll ? 'translate-x-5' : ''}"></span>
+            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status!.twoFingerScroll ? 'translate-x-5' : ''}"></span>
           </button>
         </div>
 
@@ -159,11 +161,11 @@
             <span class="text-sm">Disable while typing</span>
           </div>
           <button
-            onclick={() => setSetting('disableWhileTyping', !status.disableWhileTyping)}
+            onclick={() => setSetting('disableWhileTyping', !status!.disableWhileTyping)}
             aria-label="Toggle disable while typing"
-            class="relative w-11 h-6 rounded-full transition-colors {status.disableWhileTyping ? 'bg-primary' : 'bg-secondary border border-border'}"
+            class="relative w-11 h-6 rounded-full transition-colors {status!.disableWhileTyping ? 'bg-primary' : 'bg-secondary border border-border'}"
           >
-            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.disableWhileTyping ? 'translate-x-5' : ''}"></span>
+            <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status!.disableWhileTyping ? 'translate-x-5' : ''}"></span>
           </button>
         </div>
 
@@ -174,7 +176,7 @@
               <Gauge size={14} class="text-muted-foreground" />
               <span class="text-sm">Pointer speed</span>
             </div>
-            <span class="text-xs text-muted-foreground">{status.speed > 0 ? '+' : ''}{status.speed.toFixed(1)}</span>
+            <span class="text-xs text-muted-foreground">{status!.speed > 0 ? '+' : ''}{status!.speed.toFixed(1)}</span>
           </div>
           <input
             type="range" min="-1" max="1" step="0.1"
@@ -191,6 +193,6 @@
       </div>
     {/if}
 
-    {#if error}<p class="text-xs text-destructive">{error}</p>{/if}
-  {/if}
-</div>
+    {#if error}<Alert message={error} />{/if}
+  </div>
+{/if}

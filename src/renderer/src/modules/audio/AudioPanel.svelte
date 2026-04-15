@@ -3,8 +3,10 @@
   import { invoke } from '$lib/utils'
   import {
     Volume2, VolumeX, Volume1, Headphones, Mic,
-    ChevronDown, Speaker, Monitor, Loader2
+    ChevronDown, Speaker, Monitor
   } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert   from '$lib/Alert.svelte'
 
   type AudioDevice = {
     id: string
@@ -98,20 +100,21 @@
   onMount(load)
 </script>
 
+{#if loading}
+  <Spinner />
+{:else if error && !status}
+  <Alert message={error} />
+{:else if status}
 <div class="max-w-md space-y-3">
-  {#if loading}
-    <div class="h-48 flex items-center justify-center text-muted-foreground">
-      <Loader2 size={20} class="animate-spin mr-2" />
-      Loading audio…
-    </div>
-  {:else if status}
 
     <!-- Output Device -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2 text-sm font-medium">
-          <Speaker size={15} class="text-muted-foreground" />
-          Output Device
+        <div class="flex items-center gap-2.5 text-sm font-medium">
+          <div class="w-7 h-7 rounded-md bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <Speaker size={13} />
+          </div>
+          Output
         </div>
         <button onclick={() => showOutputSelect = !showOutputSelect} class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <span class="truncate max-w-[150px]">{status.sinks.find(s => s.isDefault)?.description || 'Select'}</span>
@@ -134,9 +137,11 @@
     <!-- Input Device -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
       <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2 text-sm font-medium">
-          <Mic size={15} class="text-muted-foreground" />
-          Input Device
+        <div class="flex items-center gap-2.5 text-sm font-medium">
+          <div class="w-7 h-7 rounded-md bg-rose-500/10 text-rose-400 flex items-center justify-center shrink-0">
+            <Mic size={13} />
+          </div>
+          Input
         </div>
         <button onclick={() => showInputSelect = !showInputSelect} class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
           <span class="truncate max-w-[150px]">{status.sources.find(s => s.isDefault)?.description || 'Select'}</span>
@@ -212,6 +217,6 @@
       </div>
     {/if}
 
-    {#if error}<p class="text-xs text-destructive">{error}</p>{/if}
-  {/if}
+    {#if error}<Alert message={error} />{/if}
 </div>
+{/if}
