@@ -1590,6 +1590,79 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   // ── Storage ────────────────────────────────────────────────────────────────
+  async function getDiskIOStats(): Promise<{ name: string; readMBps: number; writeMBps: number; utilPct: number }[]> {
+    try {
+      // Try iostat first
+      const iostat = await run('iostat -x 1 1 2>/dev/null').catch(() => '')
+      const lines = iostat.split('\n')
+      const stats: { name: string; readMBps: number; writeMBps: number; utilPct: number }[] = []
+
+      let inDeviceSection = false
+      for (const line of lines) {
+        if (line.includes('Device') && line.includes('r/s')) {
+          inDeviceSection = true
+          continue
+        }
+        if (inDeviceSection && line.trim() && !line.startsWith('Device')) {
+          const parts = line.trim().split(/\s+/)
+          if (parts.length >= 14) {
+            const name = parts[0]
+            const rkB = parseFloat(parts[3]) || 0  // rkB/s
+            const wkB = parseFloat(parts[9]) || 0  // wkB/s
+            const util = parseFloat(parts[parts.length - 1]) || 0
+            if (name && !name.startsWith('loop')) {
+              stats.push({
+                name,
+                readMBps: Math.round(rkB / 1024 * 100) / 100,
+                writeMBps: Math.round(wkB / 1024 * 100) / 100,
+                utilPct: Math.round(util)
+              })
+            }
+          }
+        }
+      }
+
+      return stats
+    } catch {
+      return []
+    }
+  }
+
+  async function getSmartDetails(device: string): Promise<{
+    healthy: boolean | null
+    temperature: number | null
+    powerOnHours: number | null
+    wearLevel: number | null
+    pendingSectors: number | null
+  }> {
+    try {
+      const out = await run(`smartctl -a /dev/${device} 2>/dev/null`).catch(() => '')
+      if (!out) return { healthy: null, temperature: null, powerOnHours: null, wearLevel: null, pendingSectors: null }
+
+      const healthy = out.includes('PASSED') || out.includes('OK') ? true : out.includes('FAILED') ? false : null
+
+      // Temperature
+      const tempMatch = out.match(/Temperature.*?:\s*(\d+)\s*Celsius/)
+      const temperature = tempMatch ? parseInt(tempMatch[1]) : null
+
+      // Power-on hours
+      const hoursMatch = out.match(/Power_On_Hours.*?\[\s*(\d+)\s*\]|Power On Time.*?\[\s*(\d+)\s*\]|Power_On_Hours.*?(\d+)\s*$/m)
+      const powerOnHours = hoursMatch ? parseInt(hoursMatch[1] || hoursMatch[2] || hoursMatch[3]) : null
+
+      // Wear level (SSD) - look for Wear_Leveling_Count or Percent_Lifetime_Remaining
+      const wearMatch = out.match(/Wear_Leveling_Count.*?\[\s*(\d+)\s*\]|Percent_Lifetime_Remaining.*?\[\s*(\d+)\s*\]/)
+      const wearLevel = wearMatch ? parseInt(wearMatch[1] || wearMatch[2]) : null
+
+      // Pending sectors
+      const pendingMatch = out.match(/Current_Pending_Sector.*?\[\s*(\d+)\s*\]|Current Pending Sector.*?(\d+)$/m)
+      const pendingSectors = pendingMatch ? parseInt(pendingMatch[1] || pendingMatch[2]) : null
+
+      return { healthy, temperature, powerOnHours, wearLevel, pendingSectors }
+    } catch {
+      return { healthy: null, temperature: null, powerOnHours: null, wearLevel: null, pendingSectors: null }
+    }
+  }
+
   ipcMain.handle('storage:status', async () => {
     // Partitions via df
     const dfOut = await run("df -B1 --output=source,fstype,size,used,avail,pcent,target -x tmpfs -x devtmpfs -x squashfs -x overlay").catch(() => '')
@@ -1619,16 +1692,26 @@ export async function registerIpcHandlers(): Promise<void> {
       blockDevices = flatten(parsed.blockdevices || []).filter((d: BlockDev) => d.type === 'disk')
     } catch { /* lsblk may not support -J */ }
 
-    // SMART health (best-effort, no privilege escalation)
-    type SmartHealth = { device: string; healthy: boolean | null; temperature: number | null }
+    // Get I/O stats
+    const ioStats = await getDiskIOStats()
+
+    // Enhanced SMART data
+    type SmartHealth = {
+      device: string
+      healthy: boolean | null
+      temperature: number | null
+      powerOnHours: number | null
+      wearLevel: number | null
+      pendingSectors: number | null
+      readMBps: number
+      writeMBps: number
+      utilPct: number
+    }
     const smartResults: SmartHealth[] = []
     for (const dev of blockDevices) {
-      const out = await run(`smartctl -H /dev/${dev.name} 2>/dev/null`).catch(() => '')
-      if (!out) { smartResults.push({ device: dev.name, healthy: null, temperature: null }); continue }
-      const healthy = out.includes('PASSED') || out.includes('OK') ? true : out.includes('FAILED') ? false : null
-      const tempMatch = out.match(/Temperature[^:]*:\s*(\d+)/)
-      const temperature = tempMatch ? parseInt(tempMatch[1]) : null
-      smartResults.push({ device: dev.name, healthy, temperature })
+      const details = await getSmartDetails(dev.name)
+      const io = ioStats.find(s => dev.name.startsWith(s.name) || s.name.startsWith(dev.name)) || { readMBps: 0, writeMBps: 0, utilPct: 0 }
+      smartResults.push({ device: dev.name, ...details, ...io })
     }
 
     return { partitions, blockDevices, smart: smartResults }

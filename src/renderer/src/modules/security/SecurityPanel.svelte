@@ -6,8 +6,10 @@
     Lock, Unlock, Eye, EyeOff, RefreshCw,
     Terminal, HardDrive, Globe, Users, AlertTriangle,
     CheckCircle2, XCircle, ChevronDown, ChevronUp,
-    Power, Loader2
+    Power
   } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   // ── Types ─────────────────────────────────────────────────────────────────
   type FirewallStatus = {
@@ -140,20 +142,10 @@
     </button>
   </div>
 
-  {#if error}
-    <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-3">
-      <p class="text-sm text-destructive flex items-center gap-2">
-        <AlertTriangle size={14} />
-        {error}
-      </p>
-    </div>
-  {/if}
+  {#if error}<Alert message={error} />{/if}
 
   {#if loading}
-    <div class="h-64 flex items-center justify-center text-muted-foreground">
-      <Loader2 size={20} class="animate-spin mr-2" />
-      Scanning security status…
-    </div>
+    <Spinner height="h-64" />
   {:else if status}
 
     <!-- Firewall -->

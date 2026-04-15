@@ -115,33 +115,37 @@
         </div>
 
         <!-- Device info -->
-        <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
-              <Camera size={16} />
+        <div class="rounded-xl border border-border bg-card p-4">
+          <div class="flex items-start gap-2.5">
+            <div class="w-8 h-8 rounded-md bg-pink-500/10 text-pink-400 flex items-center justify-center shrink-0">
+              <Camera size={15} />
             </div>
-            <div>
-              <p class="text-sm font-medium">{cam.name}</p>
-              <p class="text-xs text-muted-foreground font-mono">{cam.node} · {cam.driver}</p>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium leading-tight">{cam.name}</p>
+              <p class="text-xs text-muted-foreground font-mono mt-0.5">{cam.node} · {cam.driver}</p>
+              {#if cam.bus}
+                <p class="text-xs text-muted-foreground mt-1">Bus: <span class="font-mono">{cam.bus}</span></p>
+              {/if}
             </div>
           </div>
-
-          {#if cam.bus}
-            <p class="text-xs text-muted-foreground">Bus: <span class="font-mono">{cam.bus}</span></p>
-          {/if}
         </div>
 
         <!-- Formats & resolutions -->
         {#if cam.formats.length > 0}
           <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-            <p class="text-sm font-medium">Supported Formats</p>
+            <div class="flex items-center gap-2">
+              <div class="w-6 h-6 rounded-md bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
+                <Eye size={13} />
+              </div>
+              <p class="text-sm font-medium">Supported Formats</p>
+            </div>
             <div class="space-y-2">
               {#each cam.formats as fmt}
                 <div>
                   <p class="text-xs font-mono font-medium text-muted-foreground mb-1">{fmt.codec}</p>
                   <div class="flex flex-wrap gap-1.5">
                     {#each fmt.resolutions as res}
-                      <span class="text-xs font-mono px-2 py-0.5 rounded bg-secondary border border-border">
+                      <span class="text-xs font-mono px-2 py-0.5 rounded bg-secondary/50 border border-border/50">
                         {res.w}×{res.h}{res.fps > 0 ? ` @ ${res.fps}fps` : ''}
                       </span>
                     {/each}
@@ -156,9 +160,14 @@
         {#if cam.controls.length > 0}
           <div class="rounded-xl border border-border bg-card p-4 space-y-4">
             <div class="flex items-center justify-between">
-              <p class="text-sm font-medium">Camera Controls</p>
+              <div class="flex items-center gap-2">
+                <div class="w-6 h-6 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center">
+                  <RefreshCw size={12} />
+                </div>
+                <p class="text-sm font-medium">Camera Controls</p>
+              </div>
               {#if ctrlError}
-                <p class="text-xs text-destructive">{ctrlError}</p>
+                <span class="text-xs text-destructive">{ctrlError}</span>
               {/if}
             </div>
 

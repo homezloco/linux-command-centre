@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, HardDrive, Database, CheckCircle2 } from 'lucide-svelte'
+  import { RefreshCw, HardDrive, Database, CheckCircle2, Search, Package, FolderTree, EyeOff, Eye } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -19,6 +19,33 @@
   let loading = $state(true)
   let error   = $state('')
   let view    = $state<'live' | 'fstab'>('live')
+  let query   = $state('')
+  let hideSnaps = $state(true)
+
+  // Categorized mounts
+  const filteredMounts = $derived(() => {
+    if (!status) return { physical: [], snaps: [], virtual: [] }
+    let mounts = status.mounts
+    if (hideSnaps) mounts = mounts.filter(m => !m.device.startsWith('/dev/loop'))
+    if (query.trim()) {
+      const q = query.toLowerCase()
+      mounts = mounts.filter(m => 
+        m.mountpoint.toLowerCase().includes(q) ||
+        m.device.toLowerCase().includes(q) ||
+        m.fstype.toLowerCase().includes(q)
+      )
+    }
+    return {
+      physical: mounts.filter(m => m.device.startsWith('/dev/sd') || m.device.startsWith('/dev/nvme') || m.device.startsWith('/dev/hd')),
+      snaps: mounts.filter(m => m.device.startsWith('/dev/loop') && m.fstype === 'squashfs'),
+      virtual: mounts.filter(m => 
+        !m.device.startsWith('/dev/sd') && 
+        !m.device.startsWith('/dev/nvme') && 
+        !m.device.startsWith('/dev/hd') &&
+        !(m.device.startsWith('/dev/loop') && m.fstype === 'squashfs')
+      )
+    }
+  })
 
   function fmt(bytes: number): string {
     if (!bytes) return '—'
@@ -78,60 +105,127 @@
     </div>
 
     {#if view === 'live'}
-      <!-- Live mounts with usage bars -->
-      <div class="space-y-2">
-        {#each status.mounts as m}
-          <div class="rounded-xl border border-border bg-card p-4 space-y-2">
-            <div class="flex items-start gap-3">
-              <div class="p-2 rounded-lg bg-secondary shrink-0">
-                <HardDrive size={13} class="text-muted-foreground" />
-              </div>
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-sm font-medium">{m.mountpoint}</span>
-                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary border border-border text-muted-foreground">
-                    {m.fstype}
-                  </span>
-                  {#if m.inFstab}
-                    <span class="text-[10px] text-muted-foreground/50 flex items-center gap-1">
-                      <CheckCircle2 size={9} class="text-green-400" /> in fstab
-                    </span>
-                  {/if}
+      <!-- Search & Filter -->
+      <div class="flex items-center gap-2">
+        <div class="relative flex-1">
+          <Search size={12} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <input
+            bind:value={query}
+            placeholder="Filter mounts..."
+            class="w-full pl-8 pr-3 py-1.5 rounded-md border border-border bg-secondary/50 text-sm
+                   placeholder:text-muted-foreground/50 focus:outline-none"
+          />
+        </div>
+        <button
+          onclick={() => hideSnaps = !hideSnaps}
+          class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs border border-border
+                 {hideSnaps ? 'text-muted-foreground bg-secondary/30' : 'text-primary bg-primary/10'}"
+          title="{hideSnaps ? 'Show' : 'Hide'} snap mounts"
+        >
+          <Package size={12} />
+          {hideSnaps ? 'Snaps hidden' : 'Snaps shown'}
+        </button>
+      </div>
+    {/if}
+
+    {#if view === 'live'}
+      {@const cats = filteredMounts()}
+      
+      <!-- Physical Disks -->
+      {#if cats.physical.length > 0}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
+            <HardDrive size={12} />
+            Physical Disks ({cats.physical.length})
+          </div>
+          {#each cats.physical as m}
+            <div class="rounded-xl border border-border bg-card p-4 space-y-2">
+              <div class="flex items-start gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
+                  <HardDrive size={13} />
                 </div>
-                <p class="text-[10px] font-mono text-muted-foreground/60 truncate mt-0.5">{m.device}</p>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm font-medium">{m.mountpoint}</span>
+                    <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary/50 border border-border/50 text-muted-foreground">
+                      {m.fstype}
+                    </span>
+                    {#if m.inFstab}
+                      <span title="In fstab">
+                        <CheckCircle2 size={10} class="text-green-400" />
+                      </span>
+                    {/if}
+                  </div>
+                  <p class="text-[10px] font-mono text-muted-foreground/60 truncate mt-0.5">{m.device}</p>
+                </div>
+                {#if m.size > 0}
+                  <div class="text-right shrink-0">
+                    <p class="text-xs font-medium">{fmt(m.used)} <span class="text-muted-foreground font-normal">/ {fmt(m.size)}</span></p>
+                    <p class="text-[10px] text-muted-foreground">{fmt(m.avail)} free</p>
+                  </div>
+                {/if}
               </div>
+
               {#if m.size > 0}
-                <div class="text-right shrink-0">
-                  <p class="text-xs font-medium">{fmt(m.used)} <span class="text-muted-foreground font-normal">/ {fmt(m.size)}</span></p>
-                  <p class="text-[10px] text-muted-foreground">{fmt(m.avail)} free</p>
+                <div class="space-y-1">
+                  <div class="h-1.5 rounded-full bg-secondary overflow-hidden">
+                    <div class="h-full rounded-full transition-all {pctColor(m.pct)}" style="width: {m.pct}%"></div>
+                  </div>
+                  <div class="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{m.pct}% used</span>
+                    <span class="font-mono truncate max-w-[200px]" title={m.options}>{m.options}</span>
+                  </div>
                 </div>
               {/if}
             </div>
+          {/each}
+        </div>
+      {/if}
 
-            {#if m.size > 0}
-              <div class="space-y-1">
-                <div class="h-1.5 rounded-full bg-secondary overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all {pctColor(m.pct)}"
-                    style="width: {m.pct}%"
-                  ></div>
+      <!-- Virtual/Special -->
+      {#if cats.virtual.length > 0}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
+            <FolderTree size={12} />
+            Virtual & Network ({cats.virtual.length})
+          </div>
+          <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
+            {#each cats.virtual as m}
+              <div class="px-4 py-2.5 flex items-center justify-between">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-sm text-muted-foreground truncate">{m.mountpoint}</span>
+                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary/30 text-muted-foreground">{m.fstype}</span>
                 </div>
-                <p class="text-[10px] text-muted-foreground text-right">{m.pct}% used</p>
+                <span class="text-[10px] font-mono text-muted-foreground/50 truncate max-w-[150px]">{m.device}</span>
               </div>
-            {/if}
-
-            {#if m.options && m.options !== 'rw,relatime'}
-              <p class="text-[10px] font-mono text-muted-foreground/40 truncate">{m.options}</p>
-            {/if}
+            {/each}
           </div>
-        {/each}
+        </div>
+      {/if}
 
-        {#if status.mounts.length === 0}
-          <div class="rounded-xl border border-border bg-card p-8 text-center">
-            <p class="text-sm text-muted-foreground">No mount points found</p>
+      <!-- Snap Packages (when shown) -->
+      {#if !hideSnaps && cats.snaps.length > 0}
+        <div class="space-y-2">
+          <div class="flex items-center gap-2 text-xs font-medium text-muted-foreground/70 uppercase tracking-wide">
+            <Package size={12} />
+            Snap Packages ({cats.snaps.length})
           </div>
-        {/if}
-      </div>
+          <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden max-h-64 overflow-y-auto">
+            {#each cats.snaps as m}
+              <div class="px-4 py-2 flex items-center justify-between">
+                <span class="text-sm text-muted-foreground truncate">{m.mountpoint}</span>
+                <span class="text-[10px] font-mono text-muted-foreground/50">{m.device}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      {#if cats.physical.length === 0 && cats.virtual.length === 0 && (hideSnaps || cats.snaps.length === 0)}
+        <div class="rounded-xl border border-border bg-card p-8 text-center">
+          <p class="text-sm text-muted-foreground">No mounts match your filter</p>
+        </div>
+      {/if}
 
     {:else}
       <!-- fstab entries -->
