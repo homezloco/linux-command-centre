@@ -179,8 +179,9 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('power:set', async (_, profile: string) => {
+    if (!/^[a-z-]+$/.test(profile)) throw new Error('Invalid profile')
     try {
-      await run(`powerprofilesctl set ${profile}`)
+      await runFile('powerprofilesctl', ['set', profile])
     } catch {
       return privilegedOp('set-power-profile', profile)
     }
@@ -188,16 +189,19 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('power:setIdleDelay', async (_, seconds: number) => {
-    await run(`gsettings set org.gnome.desktop.session idle-delay ${seconds}`)
+    if (!Number.isInteger(seconds) || seconds < 0) throw new Error('Invalid idle delay')
+    await runFile('gsettings', ['set', 'org.gnome.desktop.session', 'idle-delay', String(seconds)])
   })
 
   ipcMain.handle('power:setLidClose', async (_, ac: string, battery: string) => {
-    await run(`gsettings set org.gnome.settings-daemon.plugins.power lid-close-ac-action '${ac}'`)
-    await run(`gsettings set org.gnome.settings-daemon.plugins.power lid-close-battery-action '${battery}'`)
+    if (!/^[a-z-]+$/.test(ac) || !/^[a-z-]+$/.test(battery)) throw new Error('Invalid action')
+    await runFile('gsettings', ['set', 'org.gnome.settings-daemon.plugins.power', 'lid-close-ac-action', ac])
+    await runFile('gsettings', ['set', 'org.gnome.settings-daemon.plugins.power', 'lid-close-battery-action', battery])
   })
 
   ipcMain.handle('power:setPowerButton', async (_, action: string) => {
-    await run(`gsettings set org.gnome.settings-daemon.plugins.power power-button-action '${action}'`)
+    if (!/^[a-z-]+$/.test(action)) throw new Error('Invalid action')
+    await runFile('gsettings', ['set', 'org.gnome.settings-daemon.plugins.power', 'power-button-action', action])
   })
 
   // ── WiFi ───────────────────────────────────────────────────────────────────
@@ -268,11 +272,9 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('wifi:connect', async (_, ssid: string, password?: string) => {
     // nmcli connect — works without root for active desktop user on Ubuntu
     try {
-      if (password) {
-        await run(`nmcli device wifi connect "${ssid}" password "${password}"`)
-      } else {
-        await run(`nmcli device wifi connect "${ssid}"`)
-      }
+      const args = ['device', 'wifi', 'connect', ssid]
+      if (password) args.push('password', password)
+      await runFile('nmcli', args)
       return { ok: true }
     } catch (e: unknown) {
       return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
@@ -283,7 +285,7 @@ export async function registerIpcHandlers(): Promise<void> {
     try {
       const dev = await run('nmcli -t -f DEVICE,TYPE device status')
         .then(o => o.split('\n').find(l => l.includes(':wifi:'))?.split(':')[0] ?? 'wlan0')
-      await run(`nmcli device disconnect ${dev}`)
+      await runFile('nmcli', ['device', 'disconnect', dev])
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String(e) }
@@ -310,7 +312,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('wifi:forget', async (_, ssid: string) => {
     try {
-      await run(`nmcli connection delete "${ssid}"`)
+      await runFile('nmcli', ['connection', 'delete', ssid])
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String(e) }
@@ -336,7 +338,7 @@ export async function registerIpcHandlers(): Promise<void> {
       // Set randomization for all WiFi connections
       const mode = enabled ? 'stable' : 'default'
       for (const conn of conns) {
-        await run(`nmcli connection modify "${conn}" 802-11-wireless.cloned-mac-address ${mode}`).catch(() => {})
+        await runFile('nmcli', ['connection', 'modify', conn, '802-11-wireless.cloned-mac-address', mode]).catch(() => {})
       }
       return { ok: true }
     } catch (e) {
@@ -362,7 +364,7 @@ export async function registerIpcHandlers(): Promise<void> {
           // Check connection state for each
           for (const { mac, name } of macs) {
             try {
-              const info = await run(`bluetoothctl info ${mac}`)
+              const info = await runFile('bluetoothctl', ['info', mac])
               const connected = /Connected:\s+yes/i.test(info)
               const type = info.match(/Icon:\s+(\S+)/i)?.[1] ?? 'unknown'
               devices.push({ mac, name, connected, type })
@@ -383,9 +385,11 @@ export async function registerIpcHandlers(): Promise<void> {
     return privilegedOp('bluetooth-toggle')
   })
 
+  const isMac = (s: string): boolean => /^[0-9A-Fa-f:]{17}$/.test(s)
+
   async function getDeviceInfo(mac: string): Promise<{ name: string; type: string; rssi: number | null }> {
     try {
-      const info = await run(`bluetoothctl info ${mac}`)
+      const info = await runFile('bluetoothctl', ['info', mac])
       const nameMatch = info.match(/Name:\s*(.+)/)
       const aliasMatch = info.match(/Alias:\s*(.+)/)
       const iconMatch = info.match(/Icon:\s*(.+)/)
@@ -445,8 +449,9 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('bluetooth:connect', async (_, mac: string) => {
+    if (!isMac(mac)) return { ok: false, error: 'Invalid MAC address' }
     try {
-      await withTimeout(run(`bluetoothctl connect ${mac}`), 30000, 'Connect')
+      await withTimeout(runFile('bluetoothctl', ['connect', mac]), 30000, 'Connect')
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
@@ -454,8 +459,9 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('bluetooth:disconnect', async (_, mac: string) => {
+    if (!isMac(mac)) return { ok: false, error: 'Invalid MAC address' }
     try {
-      await run(`bluetoothctl disconnect ${mac}`)
+      await runFile('bluetoothctl', ['disconnect', mac])
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
@@ -472,10 +478,11 @@ export async function registerIpcHandlers(): Promise<void> {
   }
 
   ipcMain.handle('bluetooth:pair', async (_, mac: string) => {
+    if (!isMac(mac)) return { ok: false, error: 'Invalid MAC address' }
     try {
-      await withTimeout(run(`bluetoothctl pair ${mac}`), 30000, 'Pairing')
-      await run(`bluetoothctl trust ${mac}`).catch(() => {})
-      await run(`bluetoothctl connect ${mac}`).catch(() => {})
+      await withTimeout(runFile('bluetoothctl', ['pair', mac]), 30000, 'Pairing')
+      await runFile('bluetoothctl', ['trust', mac]).catch(() => {})
+      await runFile('bluetoothctl', ['connect', mac]).catch(() => {})
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
@@ -483,8 +490,9 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('bluetooth:remove', async (_, mac: string) => {
+    if (!isMac(mac)) return { ok: false, error: 'Invalid MAC address' }
     try {
-      await run(`bluetoothctl remove ${mac}`)
+      await runFile('bluetoothctl', ['remove', mac])
       return { ok: true }
     } catch (e) {
       return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
@@ -603,29 +611,37 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   })
 
+  const isAudioId = (s: string): boolean => /^[0-9]+$/.test(s)
+  const clampPct = (n: number): number => Math.max(0, Math.min(150, Number(n) || 0))
+
   ipcMain.handle('audio:setVolume', async (_, value: number) => {
-    await run(`wpctl set-volume @DEFAULT_AUDIO_SINK@ ${value}%`)
-    return value
+    const pct = clampPct(value)
+    await runFile('wpctl', ['set-volume', '@DEFAULT_AUDIO_SINK@', `${pct}%`])
+    return pct
   })
 
   ipcMain.handle('audio:toggleMute', async () => {
-    await run('wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle')
+    await runFile('wpctl', ['set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'])
   })
 
   ipcMain.handle('audio:setDefaultSink', async (_, id: string) => {
-    await run(`wpctl set-default ${id}`)
+    if (!isAudioId(id)) throw new Error('Invalid sink id')
+    await runFile('wpctl', ['set-default', id])
   })
 
   ipcMain.handle('audio:setDefaultSource', async (_, id: string) => {
-    await run(`wpctl set-default ${id}`)
+    if (!isAudioId(id)) throw new Error('Invalid source id')
+    await runFile('wpctl', ['set-default', id])
   })
 
   ipcMain.handle('audio:setStreamVolume', async (_, id: string, volume: number) => {
-    await run(`wpctl set-volume ${id} ${volume}%`)
+    if (!isAudioId(id)) throw new Error('Invalid stream id')
+    await runFile('wpctl', ['set-volume', id, `${clampPct(volume)}%`])
   })
 
   ipcMain.handle('audio:setStreamMute', async (_, id: string, muted: boolean) => {
-    await run(`wpctl set-mute ${id} ${muted ? 1 : 0}`)
+    if (!isAudioId(id)) throw new Error('Invalid stream id')
+    await runFile('wpctl', ['set-mute', id, muted ? '1' : '0'])
   })
 
   // ── Display ────────────────────────────────────────────────────────────────
@@ -746,13 +762,17 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   })
 
+  const isMonitor = (s: string): boolean => /^[A-Za-z0-9._-]{1,64}$/.test(s)
+  const isMode = (s: string): boolean => /^[0-9]{2,5}x[0-9]{2,5}([_.-][A-Za-z0-9]+)*$/.test(s)
+  const isPosition = (s: string): boolean => ['left-of', 'right-of', 'above', 'below', 'same-as'].includes(s)
+
   ipcMain.handle('display:setBrightness', async (_, value: number) => {
     const clamped = Math.max(0, Math.min(100, Math.round(value)))
     const bl = await findBacklight()
 
     // 1. Try brightnessctl (works without sudo on Ubuntu 24.04 for users in video group)
     try {
-      await run(`brightnessctl set ${clamped}%`, { timeout: 3000 })
+      await runFile('brightnessctl', ['set', `${clamped}%`], { timeout: 3000 })
       return { method: 'brightnessctl', value: clamped }
     } catch {
       // brightnessctl not available or failed
@@ -776,8 +796,8 @@ export async function registerIpcHandlers(): Promise<void> {
     try {
       const displays = await run("xrandr --listactivemonitors | awk 'NR>1 {print $4}'", { timeout: 3000 })
       const display = displays.trim().split('\n')[0]
-      if (display) {
-        await run(`xrandr --output ${display} --brightness ${(clamped / 100).toFixed(2)}`, { timeout: 3000 })
+      if (display && isMonitor(display)) {
+        await runFile('xrandr', ['--output', display, '--brightness', (clamped / 100).toFixed(2)], { timeout: 3000 })
         return { method: 'xrandr', value: clamped }
       }
     } catch {
@@ -794,36 +814,43 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('display:setNightLight', async (_, enabled: boolean) => {
-    await run(`gsettings set org.gnome.settings-daemon.plugins.color night-light-enabled ${enabled}`)
+    await runFile('gsettings', ['set', 'org.gnome.settings-daemon.plugins.color', 'night-light-enabled', enabled ? 'true' : 'false'])
   })
 
   ipcMain.handle('display:setNightLightTemp', async (_, temp: number) => {
-    await run(`gsettings set org.gnome.settings-daemon.plugins.color night-light-temperature ${temp}`)
+    if (!Number.isFinite(temp) || temp < 1000 || temp > 10000) throw new Error('Invalid temperature')
+    await runFile('gsettings', ['set', 'org.gnome.settings-daemon.plugins.color', 'night-light-temperature', String(Math.round(temp))])
   })
 
   ipcMain.handle('display:setResolution', async (_, monitor: string, resolution: string, refreshRate?: number) => {
-    const rateStr = refreshRate ? ` --rate ${refreshRate}` : ''
-    return run(`xrandr --output ${monitor} --mode ${resolution}${rateStr}`).catch(() =>
-      run(`wlr-randr --output ${monitor} --mode ${resolution}@${refreshRate || 60}Hz`)
+    if (!isMonitor(monitor)) throw new Error('Invalid monitor')
+    if (!isMode(resolution)) throw new Error('Invalid resolution')
+    const args = ['--output', monitor, '--mode', resolution]
+    if (refreshRate && Number.isFinite(refreshRate)) args.push('--rate', String(refreshRate))
+    return runFile('xrandr', args).catch(() =>
+      runFile('wlr-randr', ['--output', monitor, '--mode', `${resolution}@${refreshRate || 60}Hz`])
     )
   })
 
   ipcMain.handle('display:setScale', async (_, scale: number) => {
+    if (!Number.isFinite(scale) || scale < 0.5 || scale > 4) throw new Error('Invalid scale')
     // Update GNOME text scaling factor for fractional scaling
-    await run(`gsettings set org.gnome.desktop.interface text-scaling-factor ${scale}`)
+    await runFile('gsettings', ['set', 'org.gnome.desktop.interface', 'text-scaling-factor', String(scale)])
     return { scale }
   })
 
   ipcMain.handle('display:setPrimary', async (_, monitor: string) => {
-    await run(`xrandr --output ${monitor} --primary`)
+    if (!isMonitor(monitor)) throw new Error('Invalid monitor')
+    await runFile('xrandr', ['--output', monitor, '--primary'])
   })
 
   ipcMain.handle('display:arrange', async (_, arrangements: { monitor: string; position: string; relativeTo?: string }[]) => {
     // Build xrandr command for multi-monitor arrangement
     for (const arr of arrangements) {
-      if (arr.relativeTo) {
-        await run(`xrandr --output ${arr.monitor} --${arr.position} ${arr.relativeTo}`)
-      }
+      if (!arr.relativeTo) continue
+      if (!isMonitor(arr.monitor) || !isMonitor(arr.relativeTo)) throw new Error('Invalid monitor')
+      if (!isPosition(arr.position)) throw new Error('Invalid position')
+      await runFile('xrandr', ['--output', arr.monitor, `--${arr.position}`, arr.relativeTo])
     }
   })
 
@@ -955,7 +982,7 @@ export async function registerIpcHandlers(): Promise<void> {
     if (!gsettingsKey) throw new Error(`Unknown setting: ${key}`)
 
     const valStr = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
-    await run(`gsettings set org.gnome.desktop.peripherals.touchpad ${gsettingsKey} ${valStr}`)
+    await runFile('gsettings', ['set', 'org.gnome.desktop.peripherals.touchpad', gsettingsKey, valStr])
     return { ok: true }
   })
 
@@ -990,14 +1017,15 @@ export async function registerIpcHandlers(): Promise<void> {
         if (!match) continue
 
         const [, name, newVer, oldVer] = match
+        if (!/^[a-zA-Z0-9._+-]+$/.test(name)) continue
 
         // Check if security update
-        const policy = await run(`apt-cache policy ${name}`).catch(() => '')
+        const policy = await runFile('apt-cache', ['policy', name]).catch(() => '')
         const isSecurity = policy.includes('-security') || policy.includes('security.ubuntu.com')
 
         // Get size from apt-cache
-        const show = await run(`apt-cache show ${name} 2>/dev/null | grep -E '^(Size:|Filename:)' | head -2`).catch(() => '')
-        const sizeMatch = show.match(/Size:\s+(\d+)/)
+        const show = await runFile('apt-cache', ['show', name]).catch(() => '')
+        const sizeMatch = show.match(/^Size:\s+(\d+)/m)
         const size = sizeMatch ? formatBytes(parseInt(sizeMatch[1])) : 'Unknown'
 
         packages.push({
@@ -1065,8 +1093,10 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('updates:changelog', async (_, pkg: string) => {
+    if (!/^[a-zA-Z0-9._+-]+$/.test(pkg)) return { changelog: 'Invalid package name' }
     try {
-      const changelog = await run(`apt-get changelog ${pkg} 2>/dev/null | head -50`).catch(() => '')
+      const full = await runFile('apt-get', ['changelog', pkg]).catch(() => '')
+      const changelog = full.split('\n').slice(0, 50).join('\n')
       return { changelog }
     } catch {
       return { changelog: 'Changelog not available' }
@@ -1347,7 +1377,8 @@ export async function registerIpcHandlers(): Promise<void> {
     const cameras = []
     for (const grp of groups) {
       for (const node of grp.nodes) {
-        const info = await run(`v4l2-ctl -d ${node} --info 2>/dev/null`).catch(() => '')
+        if (!/^\/dev\/[a-zA-Z0-9]+$/.test(node)) continue
+        const info = await runFile('v4l2-ctl', ['-d', node, '--info']).catch(() => '')
         // Only include nodes with Video Capture + user-facing (not raw pipeline nodes)
         if (!info.includes('Video Capture')) continue
         // Skip internal pipeline nodes (ipu6 isys driver nodes expose many but are not user-facing)
@@ -1355,7 +1386,7 @@ export async function registerIpcHandlers(): Promise<void> {
         if (driver === 'isys') continue
 
         // Formats
-        const fmtOut = await run(`v4l2-ctl -d ${node} --list-formats-ext 2>/dev/null`).catch(() => '')
+        const fmtOut = await runFile('v4l2-ctl', ['-d', node, '--list-formats-ext']).catch(() => '')
         const formats: { codec: string; resolutions: { w: number; h: number; fps: number }[] }[] = []
         let curFmt: typeof formats[0] | null = null
         for (const line of fmtOut.split('\n')) {
@@ -1370,7 +1401,7 @@ export async function registerIpcHandlers(): Promise<void> {
         }
 
         // Controls
-        const ctrlOut = await run(`v4l2-ctl -d ${node} --list-ctrls 2>/dev/null`).catch(() => '')
+        const ctrlOut = await runFile('v4l2-ctl', ['-d', node, '--list-ctrls']).catch(() => '')
         const controls: { id: string; name: string; type: string; min: number; max: number; step: number; value: number; default: number }[] = []
         for (const line of ctrlOut.split('\n')) {
           const m = line.match(/^\s*(\w+)\s+0x[\da-f]+\s+\((\w+)\)\s*:\s*(.+)$/)
@@ -1382,7 +1413,7 @@ export async function registerIpcHandlers(): Promise<void> {
         }
 
         // Privacy: check if any process has the device open
-        const fuserOut = await run(`fuser ${node} 2>/dev/null`).catch(() => '')
+        const fuserOut = await runFile('fuser', [node]).catch(() => '')
         const inUse = fuserOut.trim().length > 0
         const usingPids = fuserOut.trim().split(/\s+/).filter(Boolean)
 
@@ -1402,7 +1433,8 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('camera:setControl', async (_, node: string, controlId: string, value: number) => {
     if (!/^\/dev\/video\d+$/.test(node)) throw new Error('Invalid device path')
     if (!/^\w+$/.test(controlId)) throw new Error('Invalid control name')
-    return run(`v4l2-ctl -d ${node} --set-ctrl ${controlId}=${value}`)
+    if (!Number.isFinite(value)) throw new Error('Invalid value')
+    return runFile('v4l2-ctl', ['-d', node, '--set-ctrl', `${controlId}=${value}`])
   })
 
   // ── Security ───────────────────────────────────────────────────────────────
@@ -1683,7 +1715,8 @@ export async function registerIpcHandlers(): Promise<void> {
     pendingSectors: number | null
   }> {
     try {
-      const out = await run(`smartctl -a /dev/${device} 2>/dev/null`).catch(() => '')
+      if (!/^[a-zA-Z0-9]+$/.test(device)) return { healthy: null, temperature: null, powerOnHours: null, wearLevel: null, pendingSectors: null }
+      const out = await runFile('smartctl', ['-a', `/dev/${device}`]).catch(() => '')
       if (!out) return { healthy: null, temperature: null, powerOnHours: null, wearLevel: null, pendingSectors: null }
 
       const healthy = out.includes('PASSED') || out.includes('OK') ? true : out.includes('FAILED') ? false : null
@@ -1917,7 +1950,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Processes ─────────────────────────────────────────────────────────────
   ipcMain.handle('processes:list', async (_, sortBy: 'cpu' | 'mem' = 'cpu') => {
     const col = sortBy === 'mem' ? '-%mem' : '-%cpu'
-    const psOut = await run(`ps aux --sort=${col} --no-headers`).catch(() => '')
+    const psOut = await runFile('ps', ['aux', `--sort=${col}`, '--no-headers']).catch(() => '')
     type Proc = { pid: number; user: string; cpu: number; mem: number; vsz: number; rss: number; stat: string; command: string; name: string }
     const procs: Proc[] = []
     for (const line of psOut.split('\n').slice(0, 50)) {
@@ -1944,7 +1977,7 @@ export async function registerIpcHandlers(): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 1) throw new Error('Invalid PID')
     if (!['TERM', 'KILL'].includes(signal)) throw new Error('Invalid signal')
     try {
-      await run(`kill -${signal} ${pid}`)
+      await runFile('kill', [`-${signal}`, String(pid)])
       return { ok: true }
     } catch {
       // Try privileged kill
@@ -2058,7 +2091,7 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('vpn:connect', async (_, name: string) => {
     if (!name || name.length > 64) throw new Error('Invalid connection name')
     try {
-      await run(`nmcli connection up ${JSON.stringify(name)}`)
+      await runFile('nmcli', ['connection', 'up', name])
     } catch (e) {
       // Fallback: privileged helper (some VPNs need root)
       await privilegedOp('vpn-up', name)
@@ -2068,7 +2101,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('vpn:disconnect', async (_, name: string) => {
     if (!name || name.length > 64) throw new Error('Invalid connection name')
-    await run(`nmcli connection down ${JSON.stringify(name)}`).catch(async () => {
+    await runFile('nmcli', ['connection', 'down', name]).catch(async () => {
       await privilegedOp('vpn-down', name)
     })
     return { ok: true }
@@ -2119,7 +2152,7 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('vpn:delete', async (_, name: string) => {
     if (!name || name.length > 64) throw new Error('Invalid connection name')
     try {
-      await run(`nmcli connection delete ${JSON.stringify(name)}`)
+      await runFile('nmcli', ['connection', 'delete', name])
       return { ok: true }
     } catch (e) {
       throw new Error(`Failed to delete VPN: ${e}`)
@@ -2214,7 +2247,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Keyboard ───────────────────────────────────────────────────────────────
   ipcMain.handle('keyboard:status', async () => {
     const gs = (schema: string, key: string) =>
-      run(`gsettings get ${schema} ${key}`).catch(() => '')
+      runFile('gsettings', ['get', schema, key]).catch(() => '')
 
     const delayRaw    = await gs('org.gnome.desktop.peripherals.keyboard', 'delay')
     const intervalRaw = await gs('org.gnome.desktop.peripherals.keyboard', 'repeat-interval')
@@ -2244,7 +2277,7 @@ export async function registerIpcHandlers(): Promise<void> {
     delay?: number; interval?: number; repeat?: boolean
   }) => {
     const gs = (schema: string, key: string, val: string) =>
-      run(`gsettings set ${schema} ${key} ${val}`)
+      runFile('gsettings', ['set', schema, key, val])
     if (opts.delay    !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'delay',           `uint32 ${opts.delay}`)
     if (opts.interval !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat-interval', `uint32 ${opts.interval}`)
     if (opts.repeat   !== undefined) await gs('org.gnome.desktop.peripherals.keyboard', 'repeat',          String(opts.repeat))
@@ -2254,7 +2287,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Mouse ──────────────────────────────────────────────────────────────────
   ipcMain.handle('mouse:status', async () => {
     const gs = (schema: string, key: string) =>
-      run(`gsettings get ${schema} ${key}`).catch(() => '')
+      runFile('gsettings', ['get', schema, key]).catch(() => '')
 
     const speedRaw        = await gs('org.gnome.desktop.peripherals.mouse', 'speed')
     const naturalRaw      = await gs('org.gnome.desktop.peripherals.mouse', 'natural-scroll')
@@ -2294,7 +2327,7 @@ export async function registerIpcHandlers(): Promise<void> {
     middleEmulation?: boolean; leftHanded?: boolean
   }) => {
     const gs = (schema: string, key: string, val: string) =>
-      run(`gsettings set ${schema} ${key} ${val}`)
+      runFile('gsettings', ['set', schema, key, val])
     const s = 'org.gnome.desktop.peripherals.mouse'
     if (opts.speed          !== undefined) await gs(s, 'speed',                  opts.speed.toFixed(4))
     if (opts.naturalScroll  !== undefined) await gs(s, 'natural-scroll',          String(opts.naturalScroll))
@@ -2336,7 +2369,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Appearance ─────────────────────────────────────────────────────────────
   ipcMain.handle('appearance:status', async () => {
     const gs = (schema: string, key: string) =>
-      run(`gsettings get ${schema} ${key}`).catch(() => '')
+      runFile('gsettings', ['get', schema, key]).catch(() => '')
     const i = 'org.gnome.desktop.interface'
     const [colorSchemeRaw, gtkThemeRaw, iconThemeRaw, cursorThemeRaw,
            fontNameRaw, textScaleRaw, cursorSizeRaw] = await Promise.all([
@@ -2412,7 +2445,7 @@ export async function registerIpcHandlers(): Promise<void> {
     cursorTheme?: string; textScale?: number; cursorSize?: number; wallpaper?: string
   }) => {
     const gs = (schema: string, key: string, val: string) =>
-      run(`gsettings set ${schema} ${key} ${val}`)
+      runFile('gsettings', ['set', schema, key, val])
     const i  = 'org.gnome.desktop.interface'
     const bg = 'org.gnome.desktop.background'
     if (opts.colorScheme !== undefined) await gs(i,  'color-scheme',        `'${opts.colorScheme}'`)
@@ -2543,7 +2576,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('printers:setDefault', async (_, name: string) => {
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid printer name')
-    return run(`lpoptions -d '${name}'`)
+    return runFile('lpoptions', ['-d', name])
   })
 
   ipcMain.handle('printers:delete', async (_, name: string) => {
@@ -2579,7 +2612,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Notifications ───────────────────────────────────────────────────────────
   ipcMain.handle('notifications:status', async () => {
     const gs = (key: string) =>
-      run(`gsettings get org.gnome.desktop.notifications ${key}`).catch(() => '')
+      runFile('gsettings', ['get', 'org.gnome.desktop.notifications', key]).catch(() => '')
     const [banners, lockScreen] = await Promise.all([
       gs('show-banners'),
       gs('show-in-lock-screen'),
@@ -2592,7 +2625,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('notifications:set', async (_, opts: { dnd?: boolean; showInLockScreen?: boolean }) => {
     const gs = (key: string, val: string) =>
-      run(`gsettings set org.gnome.desktop.notifications ${key} ${val}`)
+      runFile('gsettings', ['set', 'org.gnome.desktop.notifications', key, val])
     if (opts.dnd !== undefined)             await gs('show-banners',       opts.dnd ? 'false' : 'true')
     if (opts.showInLockScreen !== undefined) await gs('show-in-lock-screen', opts.showInLockScreen ? 'true' : 'false')
     return { ok: true }
@@ -2602,7 +2635,7 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('proxy:status', async () => {
     const p = 'org.gnome.system.proxy'
     const gs = (schema: string, key: string) =>
-      run(`gsettings get ${schema} ${key}`).catch(() => '')
+      runFile('gsettings', ['get', schema, key]).catch(() => '')
     const [mode, autoUrl, ignoreRaw,
            httpHost, httpPort,
            httpsHost, httpsPort,
@@ -2640,7 +2673,7 @@ export async function registerIpcHandlers(): Promise<void> {
   }) => {
     const p = 'org.gnome.system.proxy'
     const gs = (schema: string, key: string, val: string) =>
-      run(`gsettings set ${schema} ${key} ${val}`)
+      runFile('gsettings', ['set', schema, key, val])
     if (opts.mode !== undefined) {
       if (!['none', 'manual', 'auto'].includes(opts.mode)) throw new Error('Invalid mode')
       await gs(p, 'mode', `'${opts.mode}'`)
@@ -2685,7 +2718,7 @@ export async function registerIpcHandlers(): Promise<void> {
       const comment = parts.slice(2).join(' ') || ''
       const privName = pub.replace('.pub', '')
       const hasPrivate = files.includes(privName)
-      const fpOut = await run(`ssh-keygen -lf "${sshDir}/${pub}" 2>/dev/null`).catch(() => '')
+      const fpOut = await runFile('ssh-keygen', ['-lf', `${sshDir}/${pub}`]).catch(() => '')
       const fingerprint = fpOut.match(/\d+\s+(SHA256:\S+)/)?.[1] || ''
       const bits = parseInt(fpOut.match(/^(\d+)\s+/)?.[1] || '0')
       keys.push({ name: privName, type, comment, fingerprint, bits, hasPrivate, publicKey: content.trim() })
@@ -2711,7 +2744,7 @@ export async function registerIpcHandlers(): Promise<void> {
     const keyPath = `${sshDir}/${filename}`
     if (existsSync(keyPath)) throw new Error(`Key "${filename}" already exists`)
     const bits  = type === 'rsa' ? ['-b', '4096'] : []
-    const out = await run(`ssh-keygen -t ${type} ${bits.join(' ')} -C '${comment || filename}' -f '${keyPath}' -N '' 2>&1`)
+    const out = await runFile('ssh-keygen', ['-t', type, ...bits, '-C', comment || filename, '-f', keyPath, '-N', ''])
     return out
   })
 
@@ -2732,7 +2765,7 @@ export async function registerIpcHandlers(): Promise<void> {
     if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in crontab content')
     const tmpPath = `/tmp/lcc-crontab-${Date.now()}`
     await writeFile(tmpPath, content.trimEnd() + '\n', 'utf8')
-    try { return await run(`crontab '${tmpPath}'`) }
+    try { return await runFile('crontab', [tmpPath]) }
     finally { await unlink(tmpPath).catch(() => {}) }
   })
 
@@ -2784,7 +2817,7 @@ export async function registerIpcHandlers(): Promise<void> {
     const result: { id: string; label: string; current: string; currentName: string; apps: { id: string; name: string }[] }[] = []
     for (const cat of MIME_CATEGORIES) {
       const primary = cat.mimes[0]
-      const current = (await run(`xdg-mime query default ${primary} 2>/dev/null`).catch(() => '')).trim()
+      const current = (await runFile('xdg-mime', ['query', 'default', primary]).catch(() => '')).trim()
       const currentName = await desktopName(current)
       const apps = await appsForMime(primary)
       result.push({ id: cat.id, label: cat.label, current, currentName, apps })
@@ -2797,7 +2830,7 @@ export async function registerIpcHandlers(): Promise<void> {
     const cat = MIME_CATEGORIES.find(c => c.id === categoryId)
     if (!cat) throw new Error('Unknown category')
     for (const mime of cat.mimes) {
-      await run(`xdg-mime default '${desktopFile}' '${mime}'`).catch(() => {})
+      await runFile('xdg-mime', ['default', desktopFile, mime]).catch(() => {})
     }
     return { ok: true }
   })
@@ -2807,7 +2840,7 @@ export async function registerIpcHandlers(): Promise<void> {
     const statusOut = await run('localectl status 2>/dev/null').catch(() => '')
     const lang     = statusOut.match(/System Locale:\s+LANG=(\S+)/)?.[1] || ''
     const x11      = statusOut.match(/X11 Layout:\s+(\S+)/)?.[1] || ''
-    const region   = (await run(`gsettings get org.gnome.system.locale region 2>/dev/null`).catch(() => '')).trim().replace(/^'|'$/g, '')
+    const region   = (await runFile('gsettings', ['get', 'org.gnome.system.locale', 'region']).catch(() => '')).trim().replace(/^'|'$/g, '')
     return { lang, x11Layout: x11, region: region || lang }
   })
 
@@ -2824,7 +2857,7 @@ export async function registerIpcHandlers(): Promise<void> {
   // ── Accessibility ───────────────────────────────────────────────────────────
   ipcMain.handle('accessibility:status', async () => {
     const gs = (schema: string, key: string) =>
-      run(`gsettings get ${schema} ${key} 2>/dev/null`).catch(() => 'false')
+      runFile('gsettings', ['get', schema, key]).catch(() => 'false')
     const clean = (s: string) => s.trim()
     const a11y = 'org.gnome.desktop.a11y.interface'
     const i    = 'org.gnome.desktop.interface'
@@ -2865,7 +2898,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
   ipcMain.handle('accessibility:set', async (_, opts: Record<string, boolean>) => {
     const gs  = (schema: string, key: string, val: string) =>
-      run(`gsettings set ${schema} ${key} ${val}`)
+      runFile('gsettings', ['set', schema, key, val])
     const a11y = 'org.gnome.desktop.a11y.interface'
     const app  = 'org.gnome.desktop.a11y.applications'
     const kbd  = 'org.gnome.desktop.a11y.keyboard'
@@ -3339,7 +3372,10 @@ export async function registerIpcHandlers(): Promise<void> {
 
     async function checkPackage(ref: string, label: string): Promise<IssueResult> {
       try {
-        const out = await run(`apt-cache policy ${ref} 2>/dev/null`).catch(() => '')
+        if (!/^[a-zA-Z0-9._+-]+$/.test(ref)) {
+          return { id: ref, label, type: 'package', state: 'unknown', detail: 'Invalid package name' }
+        }
+        const out = await runFile('apt-cache', ['policy', ref]).catch(() => '')
         const installedMatch = out.match(/Installed:\s*(.+)/)
         const candidateMatch = out.match(/Candidate:\s*(.+)/)
         const installed  = installedMatch?.[1]?.trim() ?? '(none)'

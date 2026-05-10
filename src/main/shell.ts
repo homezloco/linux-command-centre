@@ -22,14 +22,24 @@ export function sysexists(path: string): boolean {
 }
 
 /** Run a shell command, return stdout. Throws on non-zero exit. */
-export async function run(cmd: string, opts: { maxBuffer?: number } = {}): Promise<string> {
-  const { stdout } = await execAsync(cmd, { maxBuffer: opts.maxBuffer ?? 1024 * 1024 })
+export async function run(cmd: string, opts: { maxBuffer?: number; timeout?: number } = {}): Promise<string> {
+  const { stdout } = await execAsync(cmd, {
+    maxBuffer: opts.maxBuffer ?? 1024 * 1024,
+    timeout: opts.timeout
+  })
   return stdout.trim()
 }
 
 /** Run a command with explicit args (safer than shell string) */
-export async function runFile(file: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(file, args)
+export async function runFile(
+  file: string,
+  args: string[],
+  opts: { timeout?: number; maxBuffer?: number } = {}
+): Promise<string> {
+  const { stdout } = await execFileAsync(file, args, {
+    timeout: opts.timeout,
+    maxBuffer: opts.maxBuffer ?? 1024 * 1024
+  })
   return stdout.trim()
 }
 
