@@ -43,7 +43,7 @@
   <div class="space-y-1.5 max-w-xl">
 
     {#if error}
-      <p class="text-xs text-destructive mb-2">{error}</p>
+      <Alert message={error} />
     {/if}
 
     <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">

@@ -34,15 +34,66 @@
     "ws": "^8.18.0"
   },
   "build": {
-    "appId": "io.lcc.app",
+    "appId": "com.electron.linux-command-centre",
     "productName": "Linux Command Centre",
-    "linux": {
-      "target": ["deb", "AppImage"],
-      "category": "System"
+    "copyright": "Copyright 2024",
+    "asar": true,
+    "asarUnpack": [
+      "**\\*.{node,dll,exe}",
+      "**\\preload.js"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
     },
-    "files": ["out/**/*"],
+    "files": [
+      "out"
+    ],
     "extraResources": [
-      { "from": "helper/lcc-helper.js", "to": "lcc-helper.js" }
-    ]
+      {
+        "from": "helper/lcc-helper.js",
+        "to": "helper/lcc-helper.js"
+      }
+    ],
+    "linux": {
+      "category": "System;Settings;",
+      "maintainer": "linux-command-centre",
+      "vendor": "Linux Command Centre",
+      "synopsis": "Centralised Linux system management",
+      "description": "A desktop dashboard for managing Linux systems: system info, network, VPN, Wi-Fi, Bluetooth, firewall, DNS, hardware, storage, services, logs, and more.",
+      "target": [
+        {
+          "target": "deb",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "rpm",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "tar.gz",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "desktop": {
+        "Name": "Linux Command Centre",
+        "Comment": "Centralised system management dashboard",
+        "Categories": "System;Settings;",
+        "StartupNotify": "true",
+        "Terminal": "false"
+      }
+    },
+    "mac": {
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "oneClick": false
+    }
   }
 }

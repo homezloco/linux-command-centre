@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package (Linux)
+        run: npm run package -- --linux deb rpm tar.gz
+
+      - name: Rename artifacts
+        run: |
+          cd release
+          for f in *.deb; do [ -f "$f" ] && mv "$f" "linux-command-centre_${{ github.ref_name }}_amd64.deb" || true; done
+          for f in *.rpm; do [ -f "$f" ] && mv "$f" "linux-command-centre-${{ github.ref_name }}.x86_64.rpm" || true; done
+          for f in *.tar.gz; do [ -f "$f" ] && mv "$f" "linux-command-centre-${{ github.ref_name }}-linux-x64.tar.gz" || true; done
+          for f in *.AppImage; do [ -f "$f" ] && mv "$f" "linux-command-centre-${{ github.ref_name }}-x86_64.AppImage" || true; done
+          ls -la
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: release/*
+
+  release:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-artifacts
+          path: release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          draft: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

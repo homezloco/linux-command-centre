@@ -6,7 +6,7 @@
            Lock, Clock, MousePointer, Paintbrush, Users, Wrench,
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
-           Dna, FolderOpen, Gauge, Layers, Timer } from 'lucide-svelte'
+           Dna, FolderOpen, Gauge, Layers, Timer, Laptop } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -47,6 +47,7 @@
   import SmartPanel       from './modules/smart/SmartPanel.svelte'
   import GrubPanel        from './modules/grub/GrubPanel.svelte'
   import TimersPanel      from './modules/timers/TimersPanel.svelte'
+  import DevicePanel      from './modules/device/DevicePanel.svelte'
   import CommandPalette   from '$lib/CommandPalette.svelte'
   import { invoke }      from '$lib/utils'
 
@@ -90,6 +91,7 @@
         { id: 'smart',     label: 'Disk Health', icon: Gauge,       component: SmartPanel },
         { id: 'printers',  label: 'Printers',  icon: Printer,       component: PrintersPanel },
         { id: 'camera',    label: 'Camera',    icon: Camera,        component: CameraPanel },
+        { id: 'device',    label: 'Device',    icon: Laptop,        component: DevicePanel },
       ]
     },
     {

@@ -3,6 +3,8 @@
   import { invoke } from '$lib/utils'
   import { streamStore } from '$stores/stream'
   import { BatteryCharging, Battery, BatteryWarning, Clock, Zap, RotateCw, Gauge } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type BatteryStatus = {
     capacity: number
@@ -91,9 +93,9 @@
 </script>
 
 {#if loading}
-  <div class="flex items-center justify-center h-48 text-muted-foreground text-sm">Loading…</div>
+  <Spinner height="h-48" />
 {:else if !info}
-  <div class="text-muted-foreground text-sm">No battery found.</div>
+  <Alert variant="info" message="No battery found on this system." />
 {:else}
   {@const Icon = batteryIcon(info.status, info.capacity)}
   <div class="space-y-4 max-w-lg">
@@ -201,7 +203,7 @@
           {saving ? 'Saving…' : 'Apply'}
         </button>
         {#if error}
-          <p class="text-xs text-destructive">{error}</p>
+          <Alert variant="error" message={error} />
         {/if}
       </div>
     </div>

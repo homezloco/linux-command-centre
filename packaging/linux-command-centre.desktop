@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Linux Command Centre
+Comment=Centralised Linux system management dashboard
+Exec=/usr/lib/linux-command-centre/linux-command-centre
+Icon=linux-command-centre
+Type=Application
+Categories=System;Settings;
+Terminal=false
+StartupNotify=true
+Keywords=system;settings;network;vpn;wifi;bluetooth;firewall;dns;hardware;storage;services;logs;updates;

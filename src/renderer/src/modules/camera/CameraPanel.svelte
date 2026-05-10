@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, Camera, CameraOff, Eye, EyeOff, AlertTriangle, CheckCircle2 } from 'lucide-svelte'
+  import { RefreshCw, Camera, CameraOff, Eye, EyeOff, AlertTriangle, CheckCircle2, XCircle } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -19,11 +19,14 @@
     ipu6Loaded: boolean
     halInstalled: boolean
   }
+  type HwCheck = { id: string; label: string; state: 'ok' | 'warn' | 'fail' | 'info'; detail: string }
 
   let status     = $state<CameraStatus | null>(null)
   let loading    = $state(true)
   let error      = $state('')
   let ctrlError  = $state('')
+  let isHuawei   = $state(false)
+  let ipu6Checks = $state<HwCheck[]>([])
 
   // Local control values (optimistic updates)
   let localCtrls = $state<Record<string, number>>({})
@@ -31,10 +34,18 @@
   async function load() {
     loading = true; error = ''
     try {
-      status = await invoke<CameraStatus>('camera:status')
-      // Seed local control values from device state
+      const [s, devInfo, hwChecks] = await Promise.all([
+        invoke<CameraStatus>('camera:status'),
+        invoke<{ isHuawei: boolean }>('device:info'),
+        invoke<HwCheck[]>('device:hardwareStatus'),
+      ])
+      status = s
+      isHuawei = devInfo.isHuawei
+      ipu6Checks = hwChecks.filter(c =>
+        ['mod-intel_ipu6','mod-ipu_bridge','mod-intel_skl_int3472','mod-gc2607','acpi-camera','camera-hal'].includes(c.id)
+      )
       const ctrls: Record<string, number> = {}
-      for (const cam of status.cameras) {
+      for (const cam of s.cameras) {
         for (const c of cam.controls) ctrls[`${cam.node}:${c.id}`] = c.value
       }
       localCtrls = ctrls
@@ -221,28 +232,35 @@
       {/each}
     {/if}
 
-    <!-- ipu6 diagnostic -->
-    {#if status.ipu6Loaded}
+    <!-- IPU6 pipeline (Huawei / Intel IPU6 machines) -->
+    {#if isHuawei && ipu6Checks.length > 0}
       <div class="rounded-xl border border-border bg-card p-4 space-y-2">
-        <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Intel IPU6 Diagnostics</p>
-        <div class="grid grid-cols-2 gap-2 text-xs">
-          <div class="flex items-center gap-2">
-            {#if status.ipu6Loaded}
-              <CheckCircle2 size={12} class="text-green-400" />
-            {:else}
-              <AlertTriangle size={12} class="text-yellow-400" />
-            {/if}
-            <span class="text-muted-foreground">Kernel module</span>
-          </div>
-          <div class="flex items-center gap-2">
-            {#if status.halInstalled}
-              <CheckCircle2 size={12} class="text-green-400" />
-            {:else}
-              <AlertTriangle size={12} class="text-yellow-400" />
-            {/if}
-            <span class="text-muted-foreground">Camera HAL {status.halInstalled ? 'found' : 'not found'}</span>
-          </div>
+        <p class="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wide">Intel IPU6 Pipeline</p>
+        <div class="space-y-1.5">
+          {#each ipu6Checks as check}
+            <div class="flex items-center gap-2.5 text-xs">
+              {#if check.state === 'ok'}
+                <CheckCircle2 size={12} class="shrink-0 text-green-400" />
+              {:else if check.state === 'warn'}
+                <AlertTriangle size={12} class="shrink-0 text-yellow-400" />
+              {:else if check.state === 'fail'}
+                <XCircle size={12} class="shrink-0 text-red-400" />
+              {:else}
+                <AlertTriangle size={12} class="shrink-0 text-muted-foreground/40" />
+              {/if}
+              <span class="font-mono text-muted-foreground w-44 shrink-0">{check.label}</span>
+              <span class="text-muted-foreground/60 truncate">{check.detail}</span>
+            </div>
+          {/each}
         </div>
+        <p class="text-[10px] text-muted-foreground/40 pt-1">
+          Full diagnostics in Device panel
+        </p>
+      </div>
+    {:else if status.ipu6Loaded}
+      <div class="rounded-xl border border-border bg-card p-4 flex items-center gap-3 text-xs">
+        <CheckCircle2 size={13} class="text-green-400 shrink-0" />
+        <span class="text-muted-foreground">Intel IPU6 module loaded · HAL {status.halInstalled ? 'found' : 'not installed'}</span>
       </div>
     {/if}
 

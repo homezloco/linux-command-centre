@@ -192,7 +192,7 @@
 
   <!-- Error -->
   {#if error}
-    <div class="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">{error}</div>
+    <Alert message={error} />
   {/if}
 
   <!-- Log entries -->

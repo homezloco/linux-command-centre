@@ -8,7 +8,7 @@
 'use strict'
 
 const { execFileSync, execSync, spawnSync } = require('child_process')
-const { writeFileSync, readdirSync, existsSync, readFileSync } = require('fs')
+const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync } = require('fs')
 
 const [, , operation, ...args] = process.argv
 
@@ -44,15 +44,25 @@ const ops = {
     console.log(`Battery threshold set to ${value}%`)
   },
 
-  'set-brightness'(valueStr) {
-    const pct = parseInt(valueStr)
-    if (isNaN(pct) || pct < 0 || pct > 100) throw new Error('Value must be 0–100')
-    const bl = findBacklight()
-    if (!bl) throw new Error('No backlight found')
-    const max = parseInt(sysread(`${bl}/max_brightness`))
-    const raw = Math.round((pct / 100) * max)
-    syswrite(`${bl}/brightness`, raw)
-    console.log(`Brightness set to ${pct}% (raw ${raw}/${max})`)
+  'set-brightness'(valStr) {
+    const val = parseInt(valStr, 10)
+    if (Number.isNaN(val) || val < 0 || val > 100) throw new Error('Invalid brightness value')
+    // Try brightnessctl first (modern, works with multiple controllers)
+    try {
+      execSync(`brightnessctl set ${val}%`, { stdio: 'pipe' })
+      console.log(`Set brightness to ${val}% via brightnessctl`)
+      return
+    } catch {
+      // brightnessctl not available, fall through to sysfs
+    }
+    const backlight = execSync('ls /sys/class/backlight/ 2>/dev/null | head -n1').toString().trim()
+    if (!backlight) throw new Error('No backlight found')
+    const maxStr = execSync(`cat /sys/class/backlight/${backlight}/max_brightness`).toString().trim()
+    const max = parseInt(maxStr, 10)
+    if (Number.isNaN(max) || max === 0) throw new Error('Could not read max brightness')
+    const raw = Math.round((val / 100) * max)
+    execSync(`echo ${raw} > /sys/class/backlight/${backlight}/brightness`)
+    console.log(`Set brightness to ${val}% (${raw}/${max})`)
   },
 
   'wifi-toggle'() {
@@ -148,6 +158,92 @@ const ops = {
     console.log(`VPN down: ${name}`)
   },
 
+  'vpn-create-wireguard'(name, gateway) {
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
+    if (!gateway) throw new Error('Gateway is required')
+    // Create a basic WireGuard connection (user will need to configure keys)
+    execFileSync('nmcli', ['connection', 'add',
+      'type', 'wireguard',
+      'con-name', name,
+      'ifname', name,
+      'wireguard.peer-routes', 'yes'
+    ], { stdio: 'inherit' })
+    console.log(`WireGuard VPN created: ${name}`)
+  },
+
+  'vpn-create-openvpn'(name, gateway, username, password, certFile, ovpnConfig) {
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
+    if (!gateway && !ovpnConfig) throw new Error('Gateway or config is required')
+
+    // If we have an .ovpn config, import it via nmcli
+    if (ovpnConfig) {
+      // Write config to temp file
+      const tmpFile = `/tmp/vpn-${name}.ovpn`
+      writeFileSync(tmpFile, ovpnConfig, 'utf8')
+      execFileSync('nmcli', ['connection', 'import', 'type', 'openvpn', 'file', tmpFile], { stdio: 'inherit' })
+      // Rename if needed
+      execFileSync('nmcli', ['connection', 'modify', name, 'connection.id', name], { stdio: 'inherit' })
+      unlinkSync(tmpFile)
+    } else {
+      const args = ['connection', 'add',
+        'type', 'vpn',
+        'vpn-type', 'openvpn',
+        'con-name', name,
+        'ifname', '*',
+        'vpn.data', `remote=${gateway}`
+      ]
+      if (username) {
+        args.push('vpn.secrets', `password-flags=0,username=${username}`)
+      }
+      if (certFile && existsSync(certFile)) {
+        args.push('vpn.data', `ca=${certFile}`)
+      }
+      execFileSync('nmcli', args, { stdio: 'inherit' })
+    }
+    console.log(`OpenVPN connection created: ${name}`)
+  },
+
+  'vpn-create-wireguard-full'(name, privateKey, publicKey, peerPublicKey, peerEndpoint, address) {
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
+    if (!privateKey) throw new Error('Private key is required')
+    if (!peerPublicKey) throw new Error('Peer public key is required')
+
+    const addr = address || '10.200.200.2/24'
+
+    // Create the WireGuard connection with nmcli
+    execFileSync('nmcli', ['connection', 'add',
+      'type', 'wireguard',
+      'con-name', name,
+      'ifname', name,
+      'wireguard.private-key', privateKey,
+      'ipv4.method', 'manual',
+      'ipv4.addresses', addr
+    ], { stdio: 'inherit' })
+
+    // Add the peer
+    const peerArgs = ['connection', 'modify', name,
+      'wireguard.peer-routes', 'yes',
+      '+wireguard.peers', `public-key=${peerPublicKey}`
+    ]
+    if (peerEndpoint) {
+      peerArgs.push(`endpoint=${peerEndpoint}`)
+    }
+    peerArgs.push('allowed-ips=0.0.0.0/0')
+    execFileSync('nmcli', peerArgs, { stdio: 'inherit' })
+
+    console.log(`WireGuard connection created: ${name}`)
+  },
+
+  'logs-query'(argsJson) {
+    const args = JSON.parse(argsJson)
+    const result = execFileSync('journalctl', args, {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+      shell: false
+    })
+    return result
+  },
+
   'firewall-action'(action) {
     if (!['enable', 'disable'].includes(action)) throw new Error('Action must be enable or disable')
     execFileSync('ufw', [action], { stdio: 'inherit' })
@@ -166,13 +262,17 @@ const ops = {
     if (!packagesStr || packagesStr.length === 0) throw new Error('No packages specified')
     const packages = packagesStr.split(',').filter(p => p.length > 0 && /^[a-zA-Z0-9._+-]+$/.test(p))
     if (packages.length === 0) throw new Error('Invalid package names')
-    execFileSync('apt-get', ['install', '--only-upgrade', '-y', ...packages], { stdio: 'inherit' })
+    const output = execFileSync('apt-get', ['update'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
+    const upgradeOutput = execFileSync('apt-get', ['install', '--only-upgrade', '-y', ...packages], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
     console.log(`Upgraded packages: ${packages.join(', ')}`)
+    console.log(output + upgradeOutput)
   },
 
   'apt-upgrade-all'() {
-    execFileSync('apt-get', ['upgrade', '-y'], { stdio: 'inherit' })
+    const output = execFileSync('apt-get', ['update'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
+    const upgradeOutput = execFileSync('apt-get', ['upgrade', '-y'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
     console.log('System upgrade completed')
+    console.log(output + upgradeOutput)
   },
 
   'user-add'(username, fullName) {

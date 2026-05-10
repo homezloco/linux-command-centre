@@ -5,6 +5,8 @@
     Play, Square, RotateCcw, Plus, Trash2, Power, HardDrive, Server,
     ChevronDown, Check, X, Search, RefreshCw
   } from 'lucide-svelte'
+  import Spinner from '$lib/Spinner.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   // ── Types ──────────────────────────────────────────────────────────────────
   type StartupApp = {
@@ -275,9 +277,9 @@
     {/if}
 
     {#if appsLoading}
-      <div class="h-32 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
+      <Spinner height="h-32" />
     {:else if appsError}
-      <p class="text-xs text-destructive">{appsError}</p>
+      <Alert message={appsError} />
     {:else if apps.length === 0}
       <p class="text-sm text-muted-foreground">No startup apps found.</p>
     {:else}
@@ -330,7 +332,7 @@
 {:else if tab === 'boot'}
   <div class="max-w-sm space-y-4">
     {#if grubLoading}
-      <div class="h-32 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
+      <Spinner height="h-32" />
     {:else if grub}
       <!-- Timeout -->
       <div class="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -416,9 +418,9 @@
     </div>
 
     {#if servicesLoading}
-      <div class="h-32 flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
+      <Spinner height="h-32" />
     {:else if servicesError}
-      <p class="text-xs text-destructive">{servicesError}</p>
+      <Alert message={servicesError} />
     {:else if services.length === 0}
       <p class="text-sm text-muted-foreground">
         {serviceSearch ? 'No services match your search.' : 'No loaded services found.'}

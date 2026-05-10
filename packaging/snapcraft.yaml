@@ -1,0 +1,53 @@
+name: linux-command-centre
+base: core24
+version: '0.1.0'
+summary: Centralised Linux system management dashboard
+description: |
+  A desktop system management dashboard for Ubuntu/Linux, built with Electron.
+  Manage system info, network (VPN, Wi-Fi, Bluetooth), hardware, storage,
+  services, logs, and more from one place.
+
+grade: stable
+confinement: classic
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  linux-command-centre:
+    command: linux-command-centre
+    extensions: [gnome]
+    plugs:
+      - home
+      - network
+      - network-bind
+      - hardware-observe
+      - system-observe
+      - network-observe
+      - network-manager-observe
+      - polkit
+
+parts:
+  linux-command-centre:
+    plugin: dump
+    source: .
+    source-type: local
+    build-snaps:
+      - node/20/stable
+    build-packages:
+      - python3
+      - make
+      - gcc
+      - g++
+      - libnss3-dev
+      - libgdk-pixbuf2.0-dev
+      - libgtk-3-dev
+      - libxss-dev
+      - libasound2-dev
+    override-build: |
+      npm install
+      npm run build
+      npm run package -- --linux snap
+      mkdir -p $SNAPCRAFT_PART_INSTALL/
+      cp -r release/linux*unpacked/* $SNAPCRAFT_PART_INSTALL/

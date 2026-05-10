@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.electron.linux-command-centre</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Linux Command Centre</name>
+  <summary>Centralised Linux system management dashboard</summary>
+  <description>
+    <p>A desktop system management dashboard for Ubuntu/Linux. Manage everything from one place:</p>
+    <ul>
+      <li>System overview — CPU, memory, uptime, OS/kernel info</li>
+      <li>Network — VPN, Wi-Fi, Bluetooth, firewall, DNS, proxy</li>
+      <li>Hardware — battery, thermal, display, audio, mouse, storage</li>
+      <li>System — power, security, startup, users, appearance, locale</li>
+      <li>Tools — updates, logs, services, SSH keys, crontab</li>
+    </ul>
+    <p>Built with Electron and Svelte 5, leveraging native system tools like nmcli, systemctl, gsettings, and ufw.</p>
+  </description>
+  <categories>
+    <category>System</category>
+    <category>Settings</category>
+  </categories>
+  <url type="homepage">https://github.com/yourusername/linux-command-centre</url>
+  <url type="bugtracker">https://github.com/yourusername/linux-command-centre/issues</url>
+  <developer_name>Linux Command Centre Team</developer_name>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-04-21">
+      <description>
+        <p>Initial release with 40 system management modules.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,6 +1,6 @@
 import { ipcMain, net, app, clipboard } from 'electron'
-import { exec } from 'child_process'
-import { sysread, sysexists, run } from './shell'
+import { exec, spawn } from 'child_process'
+import { sysread, sysexists, run, runFile } from './shell'
 import { privilegedOp } from './privilege'
 import { existsSync } from 'fs'
 import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
@@ -747,7 +747,50 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('display:setBrightness', async (_, value: number) => {
-    return privilegedOp('set-brightness', String(value))
+    const clamped = Math.max(0, Math.min(100, Math.round(value)))
+    const bl = await findBacklight()
+
+    // 1. Try brightnessctl (works without sudo on Ubuntu 24.04 for users in video group)
+    try {
+      await run(`brightnessctl set ${clamped}%`, { timeout: 3000 })
+      return { method: 'brightnessctl', value: clamped }
+    } catch {
+      // brightnessctl not available or failed
+    }
+
+    // 2. Try direct sysfs write (some systems allow this without root)
+    if (bl) {
+      try {
+        const maxRaw = parseInt(await sysread(`${bl}/max_brightness`) || '0')
+        if (maxRaw > 0) {
+          const raw = Math.round((clamped / 100) * maxRaw)
+          await writeFile(`${bl}/brightness`, String(Math.max(0, Math.min(maxRaw, raw))), 'utf8')
+          return { method: 'sysfs', value: clamped }
+        }
+      } catch {
+        // no write permission
+      }
+    }
+
+    // 3. Try xrandr for X11 displays (no sudo needed)
+    try {
+      const displays = await run("xrandr --listactivemonitors | awk 'NR>1 {print $4}'", { timeout: 3000 })
+      const display = displays.trim().split('\n')[0]
+      if (display) {
+        await run(`xrandr --output ${display} --brightness ${(clamped / 100).toFixed(2)}`, { timeout: 3000 })
+        return { method: 'xrandr', value: clamped }
+      }
+    } catch {
+      // xrandr not available or no X11
+    }
+
+    // 4. Last resort: privileged helper (pkexec prompt)
+    try {
+      await privilegedOp('set-brightness', String(clamped))
+      return { method: 'pkexec', value: clamped }
+    } catch (err) {
+      throw new Error(`Unable to set brightness. Install brightnessctl or ensure you have write access to ${bl || 'backlight sysfs'}.`)
+    }
   })
 
   ipcMain.handle('display:setNightLight', async (_, enabled: boolean) => {
@@ -1010,11 +1053,15 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('updates:upgrade', async (_, packages?: string[]) => {
-    // Run apt upgrade via privileged helper
-    if (packages && packages.length > 0) {
-      return privilegedOp('apt-upgrade', packages.join(','))
+    try {
+      if (packages && packages.length > 0) {
+        return await privilegedOp('apt-upgrade', packages.join(','))
+      }
+      return await privilegedOp('apt-upgrade-all')
+    } catch (err) {
+      console.error('updates:upgrade failed:', err)
+      throw new Error(`Upgrade failed: ${String(err)}`)
     }
-    return privilegedOp('apt-upgrade-all')
   })
 
   ipcMain.handle('updates:changelog', async (_, pkg: string) => {
@@ -1909,17 +1956,30 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('logs:query', async (_, opts: {
     lines?: number; unit?: string; priority?: number; since?: string; grep?: string
   } = {}) => {
+    // Build command args array (without the binary name for runFile)
     const args = ['--output=json', '--no-pager', '--reverse']
-    args.push(`-n`, String(opts.lines ?? 200))
-    if (opts.unit)                   args.push(`--unit=${opts.unit}`)
-    if (opts.priority !== undefined) args.push(`-p`, `0..${opts.priority}`)
-    if (opts.since)                  args.push(`--since=${opts.since}`)
-    if (opts.grep)                   args.push(`--grep=${opts.grep}`)
+    args.push('-n', String(opts.lines ?? 200))
+    if (opts.unit)                   args.push('--unit', opts.unit)
+    if (opts.priority !== undefined) args.push('-p', `0..${opts.priority}`)
+    if (opts.since)                  args.push('--since', opts.since)
+    if (opts.grep)                   args.push('--grep', opts.grep)
 
-    const out = await run(
-      `journalctl ${args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
-      { maxBuffer: 8 * 1024 * 1024 }
-    ).catch(() => '')
+    // Try normal execution first, fallback to privileged if permission denied
+    let out = ''
+    let errorMsg = ''
+
+    try {
+      out = await runFile('journalctl', args)
+    } catch (e) {
+      errorMsg = String(e)
+      // Try with elevated privileges
+      try {
+        out = await privilegedOp('logs-query', JSON.stringify(args))
+      } catch (privErr) {
+        console.error('Logs query failed:', errorMsg, 'Privileged fallback failed:', privErr)
+        throw new Error(`Unable to read logs: ${errorMsg}`)
+      }
+    }
 
     type JEntry = { pid: number | null; priority: number; unit: string; message: string; timestamp: number; identifier: string }
     const entries: JEntry[] = []
@@ -2012,6 +2072,118 @@ export async function registerIpcHandlers(): Promise<void> {
       await privilegedOp('vpn-down', name)
     })
     return { ok: true }
+  })
+
+  ipcMain.handle('vpn:create', async (_, config: {
+    name: string
+    type: 'openvpn' | 'wireguard' | 'pptp' | 'l2tp'
+    gateway: string
+    username?: string
+    password?: string
+    keyFile?: string
+    certFile?: string
+    ovpnConfig?: string
+  }) => {
+    if (!config.name || config.name.length > 64) throw new Error('Invalid connection name')
+    if (!config.gateway && !config.ovpnConfig) throw new Error('Gateway or config file is required')
+
+    const sanitizedName = config.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    const sanitizedGateway = config.gateway.replace(/[;|&$\`\\]/g, '')
+
+    try {
+      if (config.type === 'wireguard') {
+        // WireGuard via nmcli
+        await privilegedOp('vpn-create-wireguard', sanitizedName, sanitizedGateway)
+      } else if (config.type === 'openvpn') {
+        // OpenVPN
+        const cmd = ['nmcli', 'connection', 'add',
+          'type', 'vpn',
+          'vpn-type', 'openvpn',
+          'con-name', sanitizedName,
+          'ifname', '*',
+          'vpn.data', `remote=${sanitizedGateway}`
+        ]
+        if (config.username) {
+          cmd.push('vpn.secrets', `username=${config.username}`)
+        }
+        await privilegedOp('vpn-create-openvpn', sanitizedName, sanitizedGateway, config.username || '', config.password || '', config.certFile || '', config.ovpnConfig || '')
+      } else {
+        throw new Error(`VPN type ${config.type} not yet supported via GUI`)
+      }
+      return { ok: true }
+    } catch (e) {
+      throw new Error(`Failed to create VPN: ${e}`)
+    }
+  })
+
+  ipcMain.handle('vpn:delete', async (_, name: string) => {
+    if (!name || name.length > 64) throw new Error('Invalid connection name')
+    try {
+      await run(`nmcli connection delete ${JSON.stringify(name)}`)
+      return { ok: true }
+    } catch (e) {
+      throw new Error(`Failed to delete VPN: ${e}`)
+    }
+  })
+
+  // WireGuard key generation (no privs needed - just math)
+  ipcMain.handle('wg:generateKeys', async () => {
+    try {
+      const { privateKey, publicKey } = await new Promise<{ privateKey: string; publicKey: string }>((resolve, reject) => {
+        const wg = spawn('wg', ['genkey'])
+        let priv = ''
+        let err = ''
+        wg.stdout.on('data', (d: Buffer) => priv += d.toString())
+        wg.stderr.on('data', (d: Buffer) => err += d.toString())
+        wg.on('close', (code) => {
+          if (code !== 0) return reject(new Error(err || 'wg genkey failed'))
+          priv = priv.trim()
+          // Generate public key from private
+          const pub = spawn('wg', ['pubkey'])
+          let pubKey = ''
+          pub.stdin.write(priv)
+          pub.stdin.end()
+          pub.stdout.on('data', (d: Buffer) => pubKey += d.toString())
+          pub.stderr.on('data', (d: Buffer) => err += d.toString())
+          pub.on('close', (code2) => {
+            if (code2 !== 0) return reject(new Error(err || 'wg pubkey failed'))
+            resolve({ privateKey: priv, publicKey: pubKey.trim() })
+          })
+        })
+      })
+      return { privateKey, publicKey }
+    } catch (e) {
+      throw new Error(`Failed to generate WireGuard keys: ${e}`)
+    }
+  })
+
+  // Enhanced WireGuard creation with full configuration
+  ipcMain.handle('vpn:createWireGuard', async (_, config: {
+    name: string
+    privateKey: string
+    publicKey: string
+    peerPublicKey: string
+    peerEndpoint: string
+    address?: string
+  }) => {
+    if (!config.name || config.name.length > 64) throw new Error('Invalid connection name')
+    if (!config.privateKey || !config.peerPublicKey) throw new Error('Private key and peer public key are required')
+
+    const sanitizedName = config.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+    try {
+      await privilegedOp('vpn-create-wireguard-full',
+        sanitizedName,
+        config.privateKey,
+        config.publicKey,
+        config.peerPublicKey,
+        config.peerEndpoint || '',
+        config.address || '10.200.200.2/24'
+      )
+      return { ok: true }
+    } catch (e) {
+      throw new Error(`Failed to create WireGuard VPN: ${e}`)
+    }
   })
 
   // ── Badge counts ───────────────────────────────────────────────────────────
@@ -2922,6 +3094,316 @@ export async function registerIpcHandlers(): Promise<void> {
     if (!/^[a-zA-Z0-9@._-]+\.timer$/.test(name)) throw new Error('Invalid timer name')
     if (!['start', 'stop', 'enable', 'disable'].includes(action)) throw new Error('Invalid action')
     return privilegedOp('service-action', action, name)
+  })
+
+  // ── Device / Laptop ─────────────────────────────────────────────────────────
+
+  ipcMain.handle('device:info', async () => {
+    const vendor  = (await sysread('/sys/class/dmi/id/sys_vendor').catch(() => '')).trim()
+    const model   = (await sysread('/sys/class/dmi/id/product_name').catch(() => '')).trim()
+    const version = (await sysread('/sys/class/dmi/id/product_version').catch(() => '')).trim()
+    const bios    = (await sysread('/sys/class/dmi/id/bios_version').catch(() => '')).trim()
+    const kernel  = (await run('uname -r').catch(() => '')).trim()
+
+    const vl = vendor.toLowerCase()
+    const isHuawei = vl.includes('huawei')
+    const isMsi    = vl.includes('micro-star') || vl.includes('msi')
+
+    const supplyDirs = await readdir('/sys/class/power_supply').catch(() => [] as string[])
+    const isLaptop   = supplyDirs.some(d => d.startsWith('BAT'))
+
+    return { vendor, model, version, bios, kernel, isHuawei, isMsi, isLaptop }
+  })
+
+  ipcMain.handle('device:hardwareStatus', async () => {
+    type HwCheck = { id: string; label: string; state: 'ok' | 'warn' | 'fail' | 'info'; detail: string; action?: string }
+    const checks: HwCheck[] = []
+
+    const vendor = (await sysread('/sys/class/dmi/id/sys_vendor').catch(() => '')).toLowerCase()
+    const isHuawei = vendor.includes('huawei')
+    const isMsi    = vendor.includes('micro-star') || vendor.includes('msi')
+
+    // ── Generic laptop checks ──────────────────────────────────────────────
+    const supplyDirs = await readdir('/sys/class/power_supply').catch(() => [] as string[])
+    const batDir = supplyDirs.find(d => d.startsWith('BAT'))
+    if (batDir) {
+      const hasThreshold = existsSync(`/sys/class/power_supply/${batDir}/charge_control_end_threshold`)
+      checks.push({
+        id: 'battery-threshold',
+        label: 'Battery charge threshold',
+        state: hasThreshold ? 'ok' : 'info',
+        detail: hasThreshold ? 'Supported by kernel/driver' : 'Not supported on this hardware'
+      })
+    }
+
+    const hasPlatformProfile = existsSync('/sys/firmware/acpi/platform_profile')
+    checks.push({
+      id: 'power-profile',
+      label: 'ACPI power profiles',
+      state: hasPlatformProfile ? 'ok' : 'info',
+      detail: hasPlatformProfile ? 'platform_profile supported' : 'Not supported — power-profiles-daemon may still work'
+    })
+
+    const memSleep = await sysread('/sys/power/mem_sleep').catch(() => '')
+    if (memSleep) {
+      const hasDeep = memSleep.includes('deep')
+      checks.push({
+        id: 'sleep-state',
+        label: 'Deep sleep (S3)',
+        state: hasDeep ? 'ok' : 'warn',
+        detail: hasDeep ? 'S3 deep sleep available' : `Only s2idle available (mem_sleep: ${memSleep.trim()})`
+      })
+    }
+
+    // ── Huawei-specific ────────────────────────────────────────────────────
+    if (isHuawei) {
+      // Touchpad rebind service
+      const tpActive  = (await run('systemctl is-active touchpad-rebind.service').catch(() => 'inactive')).trim()
+      const tpEnabled = (await run('systemctl is-enabled touchpad-rebind.service').catch(() => 'disabled')).trim()
+      checks.push({
+        id: 'touchpad-rebind',
+        label: 'Touchpad rebind service',
+        state: tpActive === 'active' ? 'ok' : tpEnabled === 'enabled' ? 'warn' : 'fail',
+        detail: tpActive === 'active'
+          ? 'Running — fixes GXTP7863 boot regression'
+          : tpEnabled === 'enabled' ? 'Enabled but not active' : 'Not installed — touchpad may freeze at boot',
+        action: tpActive !== 'active' ? 'touchpad-rebind' : undefined
+      })
+
+      // libinput quirk
+      const hasQuirk = existsSync('/etc/libinput/local-overrides.quirks')
+      checks.push({
+        id: 'libinput-quirk',
+        label: 'libinput touchpad quirk',
+        state: hasQuirk ? 'ok' : 'warn',
+        detail: hasQuirk ? '/etc/libinput/local-overrides.quirks installed' : 'Missing — touchpad may not behave as clickpad'
+      })
+
+      // IPU6 camera modules
+      const ipu6Mods = ['intel_ipu6', 'ipu_bridge', 'intel_skl_int3472']
+      for (const mod of ipu6Mods) {
+        const loaded = existsSync(`/sys/module/${mod}`)
+        checks.push({
+          id: `mod-${mod}`,
+          label: `${mod}`,
+          state: loaded ? 'ok' : 'warn',
+          detail: loaded ? 'Kernel module loaded' : 'Not loaded'
+        })
+      }
+
+      // GC2607 sensor driver (out-of-tree)
+      const gc2607Loaded = existsSync('/sys/module/gc2607')
+      checks.push({
+        id: 'mod-gc2607',
+        label: 'gc2607 sensor driver',
+        state: gc2607Loaded ? 'ok' : 'fail',
+        detail: gc2607Loaded ? 'V4L2 sensor driver loaded' : 'Not loaded — camera unavailable. See github.com/abbood/gc2607-v4l2-driver'
+      })
+
+      // Camera ACPI node
+      const gcNode = '/sys/bus/acpi/devices/GCTI2607:00'
+      const gcStatus = await sysread(`${gcNode}/status`).catch(() => '')
+      checks.push({
+        id: 'acpi-camera',
+        label: 'Camera ACPI node (GCTI2607)',
+        state: gcStatus === '15' ? 'ok' : gcStatus ? 'warn' : 'info',
+        detail: gcStatus === '15' ? 'ACPI enabled (status=15)' : gcStatus ? `ACPI status=${gcStatus}` : 'Node not found in ACPI table'
+      })
+
+      // Camera HAL
+      const halOut = await run("dpkg-query -W -f='${Status}' libcamhal-ipu6epmtl 2>/dev/null").catch(() => '')
+      const halInstalled = halOut.includes('install ok installed')
+      checks.push({
+        id: 'camera-hal',
+        label: 'Camera HAL (libcamhal-ipu6epmtl)',
+        state: halInstalled ? 'ok' : 'warn',
+        detail: halInstalled ? 'Installed' : 'Not installed — run: sudo apt install libcamhal-ipu6epmtl'
+      })
+
+      // Fingerprint
+      const fpOut = await run('fprintd-list $(whoami) 2>/dev/null').catch(() => '')
+      const fpFound = fpOut.includes('enrolled') || fpOut.includes('finger')
+      const goodixPresent = (await run('lsusb 2>/dev/null').catch(() => '')).toLowerCase().includes('goodix')
+      checks.push({
+        id: 'fingerprint',
+        label: 'Fingerprint reader',
+        state: fpFound ? 'ok' : goodixPresent ? 'fail' : 'info',
+        detail: fpFound ? 'Enrolled fingerprints found' : goodixPresent ? 'Goodix sensor detected but no Linux driver available' : 'No fingerprint device detected'
+      })
+    }
+
+    // ── MSI-specific ───────────────────────────────────────────────────────
+    if (isMsi) {
+      const msiEc = existsSync('/sys/module/msi_ec')
+      checks.push({
+        id: 'msi-ec',
+        label: 'MSI EC kernel module',
+        state: msiEc ? 'ok' : 'warn',
+        detail: msiEc ? 'msi_ec loaded — fan/battery control available' : 'Not loaded — install msi-ec-dkms for fan control'
+      })
+
+      const msiCooler = await run("cat /sys/class/firmware-attributes/*/attributes/cooler_boost/current_value 2>/dev/null").catch(() => '')
+      if (msiCooler.trim()) {
+        checks.push({
+          id: 'cooler-boost',
+          label: 'Cooler Boost',
+          state: 'info',
+          detail: `Cooler Boost: ${msiCooler.trim() === '1' ? 'ON' : 'OFF'}`
+        })
+      }
+    }
+
+    return checks
+  })
+
+  // GitHub issue cache (1hr TTL)
+  const _ghCache = new Map<string, { data: Record<string, unknown>; ts: number }>()
+
+  ipcMain.handle('device:knownIssues', async (_, forceRefresh = false) => {
+    const vendor  = (await sysread('/sys/class/dmi/id/sys_vendor').catch(() => '')).toLowerCase()
+    const isHuawei = vendor.includes('huawei')
+    const isMsi    = vendor.includes('micro-star') || vendor.includes('msi')
+    const kernel   = (await run('uname -r').catch(() => '')).trim()
+
+    type IssueResult = {
+      id: string; label: string
+      type: 'github' | 'kernel' | 'package' | 'local'
+      state: 'ok' | 'open' | 'closed' | 'warn' | 'fail' | 'error' | 'unknown'
+      detail: string; url?: string; updatedAt?: string; comments?: number
+    }
+
+    const builtIn: { type: string; ref: string; label: string }[] = []
+
+    if (isHuawei) {
+      builtIn.push(
+        { type: 'github',  ref: 'intel/ipu6-drivers/399',         label: 'Camera: INT3472 GPIO conflict (VGHH-XX)' },
+        { type: 'kernel',  ref: '6.12',                            label: 'Touchpad: GXTP7863 regression fix landed' },
+        { type: 'package', ref: 'linux-image-generic-hwe-24.04',   label: 'Kernel: HWE track' },
+        { type: 'package', ref: 'libcamhal-ipu6epmtl',             label: 'Camera HAL: ipu6epmtl' },
+        { type: 'local',   ref: 'fingerprint',                     label: 'Fingerprint: Goodix sensor driver support' }
+      )
+    } else if (isMsi) {
+      builtIn.push(
+        { type: 'package', ref: 'msi-ec-dkms',                    label: 'MSI EC: fan/battery control module' }
+      )
+    }
+
+    // Load user-tracked issues
+    const userFile = `${homedir()}/.config/lcc/tracked-issues.json`
+    let userIssues: { ref: string; label: string }[] = []
+    try {
+      userIssues = JSON.parse(await readFile(userFile, 'utf8'))
+    } catch { /* none yet */ }
+
+    const GH_TTL = 60 * 60 * 1000
+    async function checkGithub(ref: string, label: string): Promise<IssueResult> {
+      const [owner, repo, num] = ref.split('/')
+      const cacheKey = ref
+      const cached = _ghCache.get(cacheKey)
+      if (!forceRefresh && cached && Date.now() - cached.ts < GH_TTL) {
+        const d = cached.data as any
+        return { id: ref, label, type: 'github', state: d.state === 'closed' ? 'closed' : 'open', detail: d.title, url: d.url, updatedAt: d.updatedAt, comments: d.comments }
+      }
+      try {
+        const resp = await net.fetch(
+          `https://api.github.com/repos/${owner}/${repo}/issues/${num}`,
+          { headers: { Accept: 'application/vnd.github.v3+json', 'User-Agent': 'linux-command-centre/1.0' } }
+        )
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const j = await resp.json() as any
+        const data = { state: j.state, title: j.title, url: j.html_url, updatedAt: j.updated_at, comments: j.comments }
+        _ghCache.set(cacheKey, { data: data as unknown as Record<string, unknown>, ts: Date.now() })
+        return { id: ref, label, type: 'github', state: j.state === 'closed' ? 'closed' : 'open', detail: j.title, url: j.html_url, updatedAt: j.updated_at, comments: j.comments }
+      } catch (e) {
+        return { id: ref, label, type: 'github', state: 'error', detail: String(e) }
+      }
+    }
+
+    function parseKernelVer(v: string): number[] {
+      return v.replace(/-.*$/, '').split('.').map(Number)
+    }
+    function kernelGte(current: string, min: string): boolean {
+      const a = parseKernelVer(current), b = parseKernelVer(min)
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const ai = a[i] ?? 0, bi = b[i] ?? 0
+        if (ai > bi) return true
+        if (ai < bi) return false
+      }
+      return true
+    }
+
+    async function checkKernel(ref: string, label: string): Promise<IssueResult> {
+      const met = kernelGte(kernel, ref)
+      return { id: ref, label, type: 'kernel', state: met ? 'closed' : 'warn', detail: met ? `Running ${kernel} ≥ ${ref}` : `Running ${kernel} — fix requires kernel ${ref}+` }
+    }
+
+    async function checkPackage(ref: string, label: string): Promise<IssueResult> {
+      try {
+        const out = await run(`apt-cache policy ${ref} 2>/dev/null`).catch(() => '')
+        const installedMatch = out.match(/Installed:\s*(.+)/)
+        const candidateMatch = out.match(/Candidate:\s*(.+)/)
+        const installed  = installedMatch?.[1]?.trim() ?? '(none)'
+        const candidate  = candidateMatch?.[1]?.trim() ?? '(none)'
+        const isInstalled = installed !== '(none)'
+        const hasUpdate   = isInstalled && candidate !== '(none)' && installed !== candidate
+        return {
+          id: ref, label, type: 'package',
+          state: !isInstalled ? 'warn' : hasUpdate ? 'open' : 'ok',
+          detail: !isInstalled ? `Not installed` : hasUpdate ? `Update available: ${installed} → ${candidate}` : `Up to date (${installed})`
+        }
+      } catch {
+        return { id: ref, label, type: 'package', state: 'unknown', detail: 'Could not check' }
+      }
+    }
+
+    async function checkLocal(ref: string, label: string): Promise<IssueResult> {
+      if (ref === 'fingerprint') {
+        const lsusb = await run('lsusb 2>/dev/null').catch(() => '')
+        const goodix = lsusb.toLowerCase().includes('goodix')
+        return { id: ref, label, type: 'local', state: goodix ? 'open' : 'ok', detail: goodix ? 'Goodix sensor present — no Linux driver available' : 'No unsupported fingerprint hardware detected' }
+      }
+      return { id: ref, label, type: 'local', state: 'unknown', detail: 'Unknown local check' }
+    }
+
+    const allItems = [
+      ...builtIn,
+      ...userIssues.map(u => ({ type: 'github', ref: u.ref, label: u.label }))
+    ]
+
+    const results = await Promise.all(allItems.map(item => {
+      switch (item.type) {
+        case 'github':  return checkGithub(item.ref, item.label)
+        case 'kernel':  return checkKernel(item.ref, item.label)
+        case 'package': return checkPackage(item.ref, item.label)
+        case 'local':   return checkLocal(item.ref, item.label)
+        default:        return Promise.resolve({ id: item.ref, label: item.label, type: 'local' as const, state: 'unknown' as const, detail: '' })
+      }
+    }))
+
+    const lastChecked = Date.now()
+    return { items: results, lastChecked, userIssues }
+  })
+
+  ipcMain.handle('device:addIssue', async (_, ref: string, label: string) => {
+    // Validate: must be owner/repo/number format
+    if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+\/\d+$/.test(ref)) throw new Error('Invalid issue ref (expected owner/repo/number)')
+    const userFile = `${homedir()}/.config/lcc/tracked-issues.json`
+    let issues: { ref: string; label: string }[] = []
+    try { issues = JSON.parse(await readFile(userFile, 'utf8')) } catch { /* none */ }
+    if (issues.some(i => i.ref === ref)) throw new Error('Issue already tracked')
+    issues.push({ ref, label: label || ref })
+    await mkdir(`${homedir()}/.config/lcc`, { recursive: true })
+    await writeFile(userFile, JSON.stringify(issues, null, 2))
+    return { ok: true }
+  })
+
+  ipcMain.handle('device:removeIssue', async (_, ref: string) => {
+    const userFile = `${homedir()}/.config/lcc/tracked-issues.json`
+    let issues: { ref: string; label: string }[] = []
+    try { issues = JSON.parse(await readFile(userFile, 'utf8')) } catch { return { ok: true } }
+    issues = issues.filter(i => i.ref !== ref)
+    await writeFile(userFile, JSON.stringify(issues, null, 2))
+    return { ok: true }
   })
 }
 
