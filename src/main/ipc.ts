@@ -2,6 +2,7 @@ import { ipcMain, net, app, clipboard } from 'electron'
 import { exec, spawn } from 'child_process'
 import { sysread, sysexists, run, runFile } from './shell'
 import { privilegedOp } from './privilege'
+import { selectProfile, evaluateProfile, type HwCheck } from './hardware-profiles'
 import { existsSync } from 'fs'
 import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { homedir } from 'os'
@@ -1443,6 +1444,9 @@ export async function registerIpcHandlers(): Promise<void> {
 
   // Load the camera module stack in dependency order.
   ipcMain.handle('camera:loadModules', async () => privilegedOp('camera-load'))
+
+  // Dual-boot: switch the hardware clock to UTC so Linux and Windows agree.
+  ipcMain.handle('device:setRtcUtc', async () => privilegedOp('rtc-set-utc'))
 
   // ── Security ───────────────────────────────────────────────────────────────
   async function getFirewallStatus() {
@@ -3156,12 +3160,11 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('device:hardwareStatus', async () => {
-    type HwCheck = { id: string; label: string; state: 'ok' | 'warn' | 'fail' | 'info'; detail: string; action?: string }
     const checks: HwCheck[] = []
 
     const vendor = (await sysread('/sys/class/dmi/id/sys_vendor').catch(() => '')).toLowerCase()
-    const isHuawei = vendor.includes('huawei')
-    const isMsi    = vendor.includes('micro-star') || vendor.includes('msi')
+    const productName = (await sysread('/sys/class/dmi/id/product_name').catch(() => '')).toLowerCase()
+    const kernelRelease = (await run('uname -r').catch(() => '')).trim()
 
     // ── Generic laptop checks ──────────────────────────────────────────────
     const supplyDirs = await readdir('/sys/class/power_supply').catch(() => [] as string[])
@@ -3195,169 +3198,75 @@ export async function registerIpcHandlers(): Promise<void> {
       })
     }
 
-    // ── Huawei-specific ────────────────────────────────────────────────────
-    if (isHuawei) {
-      // Touchpad rebind service
-      const tpActive  = (await run('systemctl is-active touchpad-rebind.service').catch(() => 'inactive')).trim()
-      const tpEnabled = (await run('systemctl is-enabled touchpad-rebind.service').catch(() => 'disabled')).trim()
-      checks.push({
-        id: 'touchpad-rebind',
-        label: 'Touchpad rebind service',
-        state: tpActive === 'active' ? 'ok' : tpEnabled === 'enabled' ? 'warn' : 'fail',
-        detail: tpActive === 'active'
-          ? 'Running — fixes GXTP7863 boot regression'
-          : tpEnabled === 'enabled' ? 'Enabled but not active' : 'Not installed — touchpad may freeze at boot',
-        action: tpActive !== 'active' ? 'touchpad-rebind' : undefined
-      })
+    // ── Dual-boot safety ───────────────────────────────────────────────────
+    // Not vendor-specific: any machine sharing a disk with Windows. Both of
+    // these can cost the user real data or time, and neither is visible
+    // anywhere else in the UI.
+    const lsblkOut = await run('lsblk -rno NAME,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null').catch(() => '')
+    const ntfsParts = lsblkOut.split('\n')
+      .map(l => l.trim().split(/\s+/))
+      .filter(p => p[1] === 'ntfs')
+      .map(p => ({ name: p[0], label: p[2] ?? '', mount: p[3] ?? '' }))
 
-      // libinput quirk
-      const hasQuirk = existsSync('/etc/libinput/local-overrides.quirks')
-      checks.push({
-        id: 'libinput-quirk',
-        label: 'libinput touchpad quirk',
-        state: hasQuirk ? 'ok' : 'warn',
-        detail: hasQuirk ? '/etc/libinput/local-overrides.quirks installed' : 'Missing — touchpad may not behave as clickpad'
-      })
+    if (ntfsParts.length > 0) {
+      // Windows Fast Startup leaves the NTFS volume hibernated rather than
+      // cleanly unmounted. Mounting it read-write in that state can corrupt
+      // the filesystem, so surface it before the user mounts anything.
+      // Only inspect already-mounted volumes — a status view should never
+      // trigger a polkit prompt just to look.
+      const mounted = ntfsParts.filter(p => p.mount)
+      const hibernating = mounted.filter(p => existsSync(`${p.mount}/hiberfil.sys`))
 
-      // IPU6 camera modules
-      const ipu6Mods = ['intel_ipu6', 'ipu_bridge', 'intel_skl_int3472']
-      for (const mod of ipu6Mods) {
-        const loaded = existsSync(`/sys/module/${mod}`)
+      if (hibernating.length > 0) {
         checks.push({
-          id: `mod-${mod}`,
-          label: `${mod}`,
-          state: loaded ? 'ok' : 'warn',
-          detail: loaded ? 'Kernel module loaded' : 'Not loaded'
+          id: 'windows-fast-startup',
+          label: 'Windows Fast Startup',
+          state: 'fail',
+          detail: `hiberfil.sys present on ${hibernating.map(p => `/dev/${p.name}`).join(', ')} — the volume is hibernated, not shut down. Writing to it risks corruption. Disable Fast Startup in Windows: Control Panel → Power Options → Choose what the power buttons do → uncheck "Turn on fast startup".`
+        })
+      } else if (mounted.length > 0) {
+        checks.push({
+          id: 'windows-fast-startup',
+          label: 'Windows Fast Startup',
+          state: 'ok',
+          detail: `No hiberfil.sys on ${mounted.length} mounted NTFS volume(s) — safe to write`
+        })
+      } else {
+        checks.push({
+          id: 'windows-fast-startup',
+          label: 'Windows Fast Startup',
+          state: 'info',
+          detail: `${ntfsParts.length} NTFS partition(s) found but none mounted — mount one to check for hiberfil.sys before writing to it`
         })
       }
 
-      // GC2607 sensor driver (out-of-tree)
-      const gc2607Loaded = existsSync('/sys/module/gc2607')
-      checks.push({
-        id: 'mod-gc2607',
-        label: 'gc2607 sensor driver',
-        state: gc2607Loaded ? 'ok' : 'fail',
-        detail: gc2607Loaded ? 'V4L2 sensor driver loaded' : 'Not loaded — camera unavailable. See github.com/abbood/gc2607-v4l2-driver'
-      })
-
-      // ── Camera stack lifecycle ─────────────────────────────────────────
-      // The GC2607 sensor driver and the GCTI2607-patched ipu_bridge are both
-      // out-of-tree. A module is tied to the kernel it was compiled against,
-      // so without DKMS registration the camera works until the next kernel
-      // upgrade and then silently stops, with nothing obvious pointing at the
-      // cause. These checks make that state visible before it bites.
-      const kver = (await run('uname -r').catch(() => '')).trim()
-      const dkmsOut = await run('dkms status 2>/dev/null').catch(() => '')
-
-      for (const pkg of ['gc2607', 'ipu-bridge-gc2607']) {
-        const lines = dkmsOut.split('\n').filter(l => l.startsWith(`${pkg}/`))
-        const registered = lines.length > 0
-        const builtForKernel = lines.some(l => l.includes(kver) && l.includes('installed'))
+      // Windows keeps the RTC in local time by default; Linux expects UTC.
+      // Left mismatched, the clock jumps by your timezone offset on every
+      // reboot between the two.
+      const localRtc = (await run('timedatectl show --property=LocalRTC --value 2>/dev/null').catch(() => '')).trim()
+      if (localRtc) {
+        const isUtc = localRtc === 'no'
         checks.push({
-          id: `dkms-${pkg}`,
-          label: `DKMS: ${pkg}`,
-          state: builtForKernel ? 'ok' : registered ? 'fail' : 'warn',
-          detail: builtForKernel
-            ? `Built and installed for ${kver} — rebuilds automatically on kernel upgrade`
-            : registered
-              ? `Registered but not built for ${kver} — camera stays broken until rebuilt`
-              : 'Not registered with DKMS — camera will break on the next kernel upgrade',
-          action: registered && !builtForKernel ? 'camera-rebuild' : undefined
+          id: 'rtc-utc',
+          label: 'Hardware clock (RTC)',
+          state: isUtc ? 'ok' : 'warn',
+          detail: isUtc
+            ? 'Set to UTC — correct for dual-boot with Windows'
+            : 'Set to local time — the clock will drift between Linux and Windows reboots',
+          action: isUtc ? undefined : 'rtc-set-utc'
         })
       }
-
-      // Is the sensor actually wired up? The I2C device is ACPI-enumerated, so
-      // its existence proves nothing — it is present even when ipu_bridge has
-      // no GCTI2607 entry. What distinguishes a working stack is that the
-      // device lost waiting_for_supplier and gained a bound driver.
-      const sensorDev = '/sys/bus/i2c/devices/i2c-GCTI2607:00'
-      if (existsSync(sensorDev)) {
-        const bound = existsSync(`${sensorDev}/driver`)
-        const waiting = existsSync(`${sensorDev}/waiting_for_supplier`)
-        checks.push({
-          id: 'camera-sensor-bound',
-          label: 'GC2607 sensor binding',
-          state: bound ? 'ok' : 'fail',
-          detail: bound
-            ? 'Bound to gc2607 with regulator suppliers attached'
-            : waiting
-              ? 'Waiting for a supplier — ipu_bridge has no GCTI2607 entry'
-              : 'Enumerated but no driver bound',
-          action: !bound ? 'camera-load' : undefined
-        })
-      }
-
-      // Under Secure Boot an unsigned module builds and installs without
-      // complaint and is then refused at load time, so check for a signature
-      // rather than leaving that failure silent.
-      const sbState = (await run('mokutil --sb-state 2>/dev/null').catch(() => '')).toLowerCase()
-      if (sbState.includes('enabled')) {
-        const modinfoOut = await runFile('modinfo', ['-k', kver, 'gc2607']).catch(() => '')
-        if (modinfoOut) {
-          const signer = modinfoOut.match(/^signer:\s*(.+)$/m)?.[1]?.trim()
-          checks.push({
-            id: 'camera-module-signed',
-            label: 'GC2607 module signature',
-            state: signer ? 'ok' : 'fail',
-            detail: signer
-              ? `Signed by "${signer}"`
-              : 'Unsigned — Secure Boot will refuse to load it. Re-run camera/install.sh',
-            action: signer ? undefined : 'camera-rebuild'
-          })
-        }
-      }
-
-      // Camera ACPI node
-      const gcNode = '/sys/bus/acpi/devices/GCTI2607:00'
-      const gcStatus = await sysread(`${gcNode}/status`).catch(() => '')
-      checks.push({
-        id: 'acpi-camera',
-        label: 'Camera ACPI node (GCTI2607)',
-        state: gcStatus === '15' ? 'ok' : gcStatus ? 'warn' : 'info',
-        detail: gcStatus === '15' ? 'ACPI enabled (status=15)' : gcStatus ? `ACPI status=${gcStatus}` : 'Node not found in ACPI table'
-      })
-
-      // Camera HAL
-      const halOut = await run("dpkg-query -W -f='${Status}' libcamhal-ipu6epmtl 2>/dev/null").catch(() => '')
-      const halInstalled = halOut.includes('install ok installed')
-      checks.push({
-        id: 'camera-hal',
-        label: 'Camera HAL (libcamhal-ipu6epmtl)',
-        state: halInstalled ? 'ok' : 'warn',
-        detail: halInstalled ? 'Installed' : 'Not installed — run: sudo apt install libcamhal-ipu6epmtl'
-      })
-
-      // Fingerprint
-      const fpOut = await run('fprintd-list $(whoami) 2>/dev/null').catch(() => '')
-      const fpFound = fpOut.includes('enrolled') || fpOut.includes('finger')
-      const goodixPresent = (await run('lsusb 2>/dev/null').catch(() => '')).toLowerCase().includes('goodix')
-      checks.push({
-        id: 'fingerprint',
-        label: 'Fingerprint reader',
-        state: fpFound ? 'ok' : goodixPresent ? 'fail' : 'info',
-        detail: fpFound ? 'Enrolled fingerprints found' : goodixPresent ? 'Goodix sensor detected but no Linux driver available' : 'No fingerprint device detected'
-      })
     }
 
-    // ── MSI-specific ───────────────────────────────────────────────────────
-    if (isMsi) {
-      const msiEc = existsSync('/sys/module/msi_ec')
-      checks.push({
-        id: 'msi-ec',
-        label: 'MSI EC kernel module',
-        state: msiEc ? 'ok' : 'warn',
-        detail: msiEc ? 'msi_ec loaded — fan/battery control available' : 'Not loaded — install msi-ec-dkms for fan control'
-      })
-
-      const msiCooler = await run("cat /sys/class/firmware-attributes/*/attributes/cooler_boost/current_value 2>/dev/null").catch(() => '')
-      if (msiCooler.trim()) {
-        checks.push({
-          id: 'cooler-boost',
-          label: 'Cooler Boost',
-          state: 'info',
-          detail: `Cooler Boost: ${msiCooler.trim() === '1' ? 'ON' : 'OFF'}`
-        })
-      }
+    // ── Machine-specific ───────────────────────────────────────────────────
+    // Per-vendor quirks live in hardware-profiles.ts so that supporting a new
+    // machine does not mean editing this file. Profiles are descriptive and
+    // may reference a privileged action by name, but cannot define one.
+    const profile = selectProfile({ vendor, product: productName })
+    if (profile) {
+      checks.push(...await evaluateProfile(profile, {
+        run, runFile, sysread, kernel: kernelRelease
+      }))
     }
 
     return checks

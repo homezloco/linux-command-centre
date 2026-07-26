@@ -76,6 +76,9 @@
       } else if (action === 'camera-load') {
         await invoke('camera:loadModules')
         await load()
+      } else if (action === 'rtc-set-utc') {
+        await invoke('device:setRtcUtc')
+        await load()
       }
     } catch (e) { error = String(e) }
     finally { actionRunning = null }

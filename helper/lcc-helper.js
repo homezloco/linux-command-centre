@@ -128,6 +128,14 @@ const ops = {
     console.log(failed.length ? `Loaded, could not load: ${failed.join(', ')}` : 'Camera module stack loaded')
   },
 
+  // Windows stores the RTC in local time by default, Linux expects UTC. With
+  // both installed the clock jumps by the timezone offset on every reboot
+  // between them. Fixing it on the Linux side is the usual remedy.
+  'rtc-set-utc'() {
+    execFileSync('timedatectl', ['set-local-rtc', '0', '--adjust-system-clock'], { stdio: 'inherit' })
+    console.log('Hardware clock set to UTC and system clock adjusted')
+  },
+
   'set-sleep-state'(state) {
     if (!['s2idle', 'deep'].includes(state)) throw new Error('State must be s2idle or deep')
     syswrite('/sys/power/mem_sleep', state)
