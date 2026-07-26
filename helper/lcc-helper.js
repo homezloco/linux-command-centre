@@ -88,6 +88,46 @@ const ops = {
     console.log('Touchpad rebound')
   },
 
+  // Rebuild out-of-tree kernel modules for the running kernel. The MateBook
+  // camera (GC2607 sensor + a patched ipu_bridge) is out-of-tree, so a kernel
+  // upgrade leaves it built only for the old kernel and the camera silently
+  // stops working. `dkms autoinstall` rebuilds everything registered.
+  //
+  // Deliberately takes no arguments: accepting a script or package path here
+  // would let any caller run arbitrary code as root through pkexec.
+  'camera-rebuild'() {
+    let out
+    try {
+      out = execFileSync('dkms', ['autoinstall'], { encoding: 'utf8' })
+    } catch (e) {
+      const detail = (e.stdout || '') + (e.stderr || '')
+      throw new Error(`dkms autoinstall failed: ${detail.trim() || e.message}`)
+    }
+    try { execFileSync('depmod', ['-a']) } catch { /* non-fatal */ }
+    console.log(out.trim() || 'DKMS autoinstall complete')
+  },
+
+  // Load the camera module stack in dependency order. gc2607 must come after
+  // intel_ipu6_isys or its async subdev never joins the media graph.
+  'camera-load'() {
+    const mods = [
+      'videodev', 'v4l2_async', 'intel_skl_int3472_discrete',
+      'intel_ipu6', 'ipu_bridge', 'intel_ipu6_isys', 'gc2607'
+    ]
+    const failed = []
+    for (const m of mods) {
+      try {
+        execFileSync('modprobe', [m], { stdio: 'pipe' })
+      } catch {
+        failed.push(m)
+      }
+    }
+    if (failed.includes('gc2607')) {
+      throw new Error('gc2607 failed to load — it may not be built for this kernel, or is unsigned under Secure Boot')
+    }
+    console.log(failed.length ? `Loaded, could not load: ${failed.join(', ')}` : 'Camera module stack loaded')
+  },
+
   'set-sleep-state'(state) {
     if (!['s2idle', 'deep'].includes(state)) throw new Error('State must be s2idle or deep')
     syswrite('/sys/power/mem_sleep', state)
@@ -189,21 +229,41 @@ const ops = {
         'type', 'vpn',
         'vpn-type', 'openvpn',
         'con-name', name,
-        'ifname', '*',
-        'vpn.data', `remote=${gateway}`
+        'ifname', '*'
       ]
+
+      // nmcli replaces a property when it is passed more than once, so
+      // vpn.data must be built as one comma-separated value. Passing it twice
+      // (remote=, then ca=) silently dropped the remote and produced a
+      // connection with no server to dial.
+      const vpnData = [`remote=${gateway}`]
       if (username) {
-        args.push('vpn.secrets', `password-flags=0,username=${username}`)
+        // username is configuration, not a secret — it belongs in vpn.data.
+        // password-flags=0 means "the password is stored in the connection",
+        // which is only true if we actually store it below.
+        vpnData.push('connection-type=password', `username=${username}`, 'password-flags=0')
       }
       if (certFile && existsSync(certFile)) {
-        args.push('vpn.data', `ca=${certFile}`)
+        vpnData.push(`ca=${certFile}`)
       }
+      args.push('vpn.data', vpnData.join(', '))
+
+      // The password was previously accepted and then never used, so every
+      // connection created this way was missing the credential it claimed to
+      // have stored, and failed to authenticate for no visible reason.
+      if (password) {
+        args.push('vpn.secrets', `password=${password}`)
+      }
+
       execFileSync('nmcli', args, { stdio: 'inherit' })
     }
     console.log(`OpenVPN connection created: ${name}`)
   },
 
-  'vpn-create-wireguard-full'(name, privateKey, publicKey, peerPublicKey, peerEndpoint, address) {
+  // _publicKey is our own public key. NetworkManager derives it from the
+  // private key, so it is not part of the connection — it is only shown in the
+  // UI so the user can hand it to the peer. Kept to preserve argument order.
+  'vpn-create-wireguard-full'(name, privateKey, _publicKey, peerPublicKey, peerEndpoint, address) {
     if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
     if (!privateKey) throw new Error('Private key is required')
     if (!peerPublicKey) throw new Error('Peer public key is required')

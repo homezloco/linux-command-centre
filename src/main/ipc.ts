@@ -1437,6 +1437,13 @@ export async function registerIpcHandlers(): Promise<void> {
     return runFile('v4l2-ctl', ['-d', node, '--set-ctrl', `${controlId}=${value}`])
   })
 
+  // Rebuild out-of-tree camera modules for the running kernel (post kernel
+  // upgrade, or after an unsigned build under Secure Boot).
+  ipcMain.handle('camera:rebuild', async () => privilegedOp('camera-rebuild'))
+
+  // Load the camera module stack in dependency order.
+  ipcMain.handle('camera:loadModules', async () => privilegedOp('camera-load'))
+
   // ── Security ───────────────────────────────────────────────────────────────
   async function getFirewallStatus() {
     try {
@@ -3232,6 +3239,73 @@ export async function registerIpcHandlers(): Promise<void> {
         state: gc2607Loaded ? 'ok' : 'fail',
         detail: gc2607Loaded ? 'V4L2 sensor driver loaded' : 'Not loaded — camera unavailable. See github.com/abbood/gc2607-v4l2-driver'
       })
+
+      // ── Camera stack lifecycle ─────────────────────────────────────────
+      // The GC2607 sensor driver and the GCTI2607-patched ipu_bridge are both
+      // out-of-tree. A module is tied to the kernel it was compiled against,
+      // so without DKMS registration the camera works until the next kernel
+      // upgrade and then silently stops, with nothing obvious pointing at the
+      // cause. These checks make that state visible before it bites.
+      const kver = (await run('uname -r').catch(() => '')).trim()
+      const dkmsOut = await run('dkms status 2>/dev/null').catch(() => '')
+
+      for (const pkg of ['gc2607', 'ipu-bridge-gc2607']) {
+        const lines = dkmsOut.split('\n').filter(l => l.startsWith(`${pkg}/`))
+        const registered = lines.length > 0
+        const builtForKernel = lines.some(l => l.includes(kver) && l.includes('installed'))
+        checks.push({
+          id: `dkms-${pkg}`,
+          label: `DKMS: ${pkg}`,
+          state: builtForKernel ? 'ok' : registered ? 'fail' : 'warn',
+          detail: builtForKernel
+            ? `Built and installed for ${kver} — rebuilds automatically on kernel upgrade`
+            : registered
+              ? `Registered but not built for ${kver} — camera stays broken until rebuilt`
+              : 'Not registered with DKMS — camera will break on the next kernel upgrade',
+          action: registered && !builtForKernel ? 'camera-rebuild' : undefined
+        })
+      }
+
+      // Is the sensor actually wired up? The I2C device is ACPI-enumerated, so
+      // its existence proves nothing — it is present even when ipu_bridge has
+      // no GCTI2607 entry. What distinguishes a working stack is that the
+      // device lost waiting_for_supplier and gained a bound driver.
+      const sensorDev = '/sys/bus/i2c/devices/i2c-GCTI2607:00'
+      if (existsSync(sensorDev)) {
+        const bound = existsSync(`${sensorDev}/driver`)
+        const waiting = existsSync(`${sensorDev}/waiting_for_supplier`)
+        checks.push({
+          id: 'camera-sensor-bound',
+          label: 'GC2607 sensor binding',
+          state: bound ? 'ok' : 'fail',
+          detail: bound
+            ? 'Bound to gc2607 with regulator suppliers attached'
+            : waiting
+              ? 'Waiting for a supplier — ipu_bridge has no GCTI2607 entry'
+              : 'Enumerated but no driver bound',
+          action: !bound ? 'camera-load' : undefined
+        })
+      }
+
+      // Under Secure Boot an unsigned module builds and installs without
+      // complaint and is then refused at load time, so check for a signature
+      // rather than leaving that failure silent.
+      const sbState = (await run('mokutil --sb-state 2>/dev/null').catch(() => '')).toLowerCase()
+      if (sbState.includes('enabled')) {
+        const modinfoOut = await runFile('modinfo', ['-k', kver, 'gc2607']).catch(() => '')
+        if (modinfoOut) {
+          const signer = modinfoOut.match(/^signer:\s*(.+)$/m)?.[1]?.trim()
+          checks.push({
+            id: 'camera-module-signed',
+            label: 'GC2607 module signature',
+            state: signer ? 'ok' : 'fail',
+            detail: signer
+              ? `Signed by "${signer}"`
+              : 'Unsigned — Secure Boot will refuse to load it. Re-run camera/install.sh',
+            action: signer ? undefined : 'camera-rebuild'
+          })
+        }
+      }
 
       // Camera ACPI node
       const gcNode = '/sys/bus/acpi/devices/GCTI2607:00'
