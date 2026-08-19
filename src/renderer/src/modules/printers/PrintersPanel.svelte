@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, Printer, Star, Trash2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -23,15 +24,29 @@
 
   async function setDefault(name: string) {
     working = name; error = ''
-    try { await invoke('printers:setDefault', name); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('printers:setDefault', name)
+      toasts.success(`Set ${name} as default printer`, 'Printers')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Printers')
+    }
     finally { working = null }
   }
 
   async function deletePrinter(name: string) {
     working = name; error = ''; confirmDelete = null
-    try { await invoke('printers:delete', name); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('printers:delete', name)
+      toasts.success(`Deleted printer ${name}`, 'Printers')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Printers')
+    }
     finally { working = null }
   }
 

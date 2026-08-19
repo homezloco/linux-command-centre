@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, UserPlus, Trash2, Shield, ShieldOff, Terminal, Home } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -31,9 +32,15 @@
   async function toggleSudo(u: User) {
     working = u.username; error = ''
     try {
-      await invoke('users:toggleSudo', u.username, u.sudo ? 'remove' : 'add')
+      const action = u.sudo ? 'remove' : 'add'
+      await invoke('users:toggleSudo', u.username, action)
+      toasts.success(`${u.username} ${u.sudo ? 'removed from' : 'added to'} sudo`, 'Users')
       await load()
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Users')
+    }
     finally { working = null }
   }
 
@@ -41,8 +48,13 @@
     working = username; error = ''; confirmDelete = null
     try {
       await invoke('users:delete', username)
+      toasts.success(`Deleted user ${username}`, 'Users')
       await load()
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Users')
+    }
     finally { working = null }
   }
 
@@ -54,9 +66,14 @@
     working = 'new'; error = ''
     try {
       await invoke('users:add', newUsername, newFullName)
+      toasts.success(`Created user ${newUsername}`, 'Users')
       showAdd = false; newUsername = ''; newFullName = ''
       await load()
-    } catch (e) { addError = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      addError = msg
+      toasts.error(msg, 'Users')
+    }
     finally { working = null }
   }
 

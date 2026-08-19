@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-  return (window as Window & { electronAPI: { invoke: (ch: string, ...a: unknown[]) => Promise<T> } })
+  return (window as unknown as Window & { electronAPI: { invoke: (ch: string, ...a: unknown[]) => Promise<T> } })
     .electronAPI.invoke(channel, ...args)
 }
 

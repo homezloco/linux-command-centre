@@ -40,6 +40,8 @@
     loading = true; error = ''
     try {
       status = await invoke<DisplayStatus>('display:status')
+      selectedResolutions = {}
+      selectedRates = {}
     } catch (e) { error = String(e) }
     finally { loading = false }
   }
@@ -104,7 +106,13 @@
 <div class="max-w-lg space-y-3">
 
     <!-- Monitors -->
-    {#if status.monitors.length > 0}
+    {#if status.monitors.length === 0}
+      <div class="rounded-xl border border-border bg-card p-8 text-center space-y-2">
+        <Monitor size={32} class="mx-auto text-muted-foreground/40" />
+        <p class="text-sm text-muted-foreground">No displays detected</p>
+        <p class="text-xs text-muted-foreground/60">Plug in a monitor or check your graphics drivers.</p>
+      </div>
+    {:else}
       <div class="space-y-2">
         {#each status.monitors as monitor}
           {@const selectedRes = selectedResolutions[monitor.name] || monitor.resolution}

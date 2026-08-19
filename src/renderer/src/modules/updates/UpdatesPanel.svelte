@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import {
     RefreshCw, CheckCircle, AlertCircle, Download, ChevronDown, ChevronUp,
     ShieldAlert, Package, FileText, RotateCw, Loader2, Power
@@ -31,7 +32,11 @@
   // Upgrade state
   let upgrading = $state(false)
   let upgradeProgress = $state('')
+  let upgradeOutput = $state('')
   let selectedPackages = $state<Set<string>>(new Set())
+  let upgradePhase = $state<'download' | 'unpack' | 'configure' | 'cleanup' | null>(null)
+  let currentPackage = $state<string | null>(null)
+  let lastOutputAt = $state<number | null>(null)
 
   // Changelog modal
   let changelogPkg = $state<string | null>(null)
@@ -71,33 +76,45 @@
     }
   }
 
+  function resetUpgradeState(message: string) {
+    error = ''; upgradeOutput = ''; upgrading = true; upgradeProgress = message
+    upgradePhase = 'download'; currentPackage = null; lastOutputAt = null
+    upgradeStartedAt = Date.now()
+  }
+
+  function finishUpgrade(success: boolean, message: string) {
+    upgrading = false
+    upgradeProgress = message
+    if (success) {
+      toasts.success('System upgrade completed successfully', 'Updates')
+    } else {
+      toasts.error(message || 'Upgrade failed', 'Updates')
+    }
+  }
+
   async function upgradeAll() {
     if (!status || status.packages.length === 0) return
-    upgrading = true; upgradeProgress = 'Upgrading all packages…'
+    resetUpgradeState('Upgrading all packages…')
     try {
       await invoke('updates:upgrade')
       await load()
-      upgradeProgress = 'Upgrade complete!'
+      finishUpgrade(true, 'Upgrade complete!')
     } catch (e) {
-      error = String(e)
-      upgradeProgress = ''
-    } finally {
-      upgrading = false
+      error = formatError(e)
+      finishUpgrade(false, 'Upgrade failed')
     }
   }
 
   async function upgradeSelected() {
     if (selectedPackages.size === 0) return
-    upgrading = true; upgradeProgress = `Upgrading ${selectedPackages.size} packages…`
+    resetUpgradeState(`Upgrading ${selectedPackages.size} package${selectedPackages.size === 1 ? '' : 's'}…`)
     try {
       await invoke('updates:upgrade', Array.from(selectedPackages))
       await load()
-      upgradeProgress = 'Upgrade complete!'
+      finishUpgrade(true, 'Upgrade complete!')
     } catch (e) {
-      error = String(e)
-      upgradeProgress = ''
-    } finally {
-      upgrading = false
+      error = formatError(e)
+      finishUpgrade(false, 'Upgrade failed')
     }
   }
 
@@ -131,7 +148,89 @@
     }
   }
 
-  onMount(load)
+  function formatError(value: unknown): string {
+    const message = value instanceof Error ? value.message : String(value)
+    return message.replace(/^Error invoking remote method '[^']+': Error:\s*/, '')
+  }
+
+  function formatElapsed(startedAt: number | null): string {
+    if (!startedAt) return ''
+    const s = Math.round((Date.now() - startedAt) / 1000)
+    if (s < 60) return `${s}s`
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m}m ${r.toString().padStart(2, '0')}s`
+  }
+
+  function parseProgress(output: string) {
+    lastOutputAt = Date.now()
+    // Look at the last meaningful lines of output
+    const lines = output.trim().split('\n')
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 6); i--) {
+      const line = lines[i]
+      if (!line) continue
+
+      // "Get:1 https://... cursor amd64 1.2.3 [123 MB]"
+      const getMatch = line.match(/^Get:\d+\s+\S+\s+(\S+)/)
+      if (getMatch) {
+        currentPackage = getMatch[1]
+        upgradePhase = 'download'
+        return
+      }
+
+      // "Preparing to unpack .../package_..."
+      const unpackMatch = line.match(/Preparing to unpack .*?\/([^/]+?)_\d/)
+      if (unpackMatch) {
+        currentPackage = unpackMatch[1]
+        upgradePhase = 'unpack'
+        return
+      }
+
+      // "Unpacking package ..."
+      const unpackingMatch = line.match(/^Unpacking\s+(\S+)/)
+      if (unpackingMatch) {
+        currentPackage = unpackingMatch[1]
+        upgradePhase = 'unpack'
+        return
+      }
+
+      // "Setting up package ..."
+      const setupMatch = line.match(/^Setting up\s+(\S+)/)
+      if (setupMatch) {
+        currentPackage = setupMatch[1]
+        upgradePhase = 'configure'
+        return
+      }
+
+      // "Processing triggers for package ..."
+      const triggerMatch = line.match(/^Processing triggers for\s+(\S+)/)
+      if (triggerMatch) {
+        currentPackage = triggerMatch[1]
+        upgradePhase = 'cleanup'
+        return
+      }
+    }
+  }
+
+  const phaseLabel: Record<NonNullable<typeof upgradePhase>, string> = {
+    download: 'Downloading',
+    unpack: 'Unpacking',
+    configure: 'Setting up',
+    cleanup: 'Finishing',
+  }
+
+  let upgradeStartedAt = $state<number | null>(null)
+
+  onMount(() => {
+    void load()
+    const api = (window as unknown as Window & {
+      electronAPI: { onUpdatesProgress: (callback: (output: string) => void) => () => void }
+    }).electronAPI
+    return api.onUpdatesProgress((output) => {
+      upgradeOutput = (upgradeOutput + output).slice(-20000)
+      parseProgress(upgradeOutput)
+    })
+  })
 
   const securityPackages = $derived(status?.packages.filter(p => p.isSecurity) ?? [])
   const regularPackages = $derived(status?.packages.filter(p => !p.isSecurity) ?? [])
@@ -161,6 +260,47 @@
         <AlertCircle size={14} />
         {error}
       </p>
+    </div>
+  {/if}
+
+  {#if upgrading || upgradeProgress}
+    <div class="rounded-xl border border-border bg-card p-3 space-y-2">
+      <div class="flex items-center justify-between gap-3 text-sm">
+        <div class="flex items-center gap-2 min-w-0">
+          {#if upgrading}<Loader2 size={14} class="animate-spin text-primary shrink-0" />{/if}
+          <span class="font-medium truncate">{upgradeProgress}</span>
+        </div>
+        {#if upgrading && upgradeStartedAt}
+          <span class="text-[10px] tabular-nums text-muted-foreground shrink-0">
+            {formatElapsed(upgradeStartedAt)}
+          </span>
+        {/if}
+      </div>
+
+      {#if upgrading}
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          {#if upgradePhase && currentPackage}
+            <span class="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground">
+              {phaseLabel[upgradePhase]} <span class="font-mono text-primary">{currentPackage}</span>
+            </span>
+          {:else}
+            <span class="px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">Preparing…</span>
+          {/if}
+          {#if lastOutputAt}
+            {@const idleSec = Math.round((Date.now() - lastOutputAt) / 1000)}
+            <span class="text-muted-foreground">
+              last output {idleSec < 5 ? 'just now' : `${idleSec}s ago`}
+            </span>
+          {/if}
+        </div>
+        <p class="text-[10px] text-muted-foreground">
+          Large downloads can take several minutes. If the timer keeps advancing, the upgrade is still in progress.
+        </p>
+      {/if}
+
+      {#if upgradeOutput}
+        <pre class="max-h-48 overflow-y-auto rounded-md bg-black/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap font-mono">{upgradeOutput}</pre>
+      {/if}
     </div>
   {/if}
 

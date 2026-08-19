@@ -77,10 +77,9 @@
 
   function toggleLive() {
     liveMode = !liveMode
+    clearInterval(interval)
     if (liveMode) {
       interval = setInterval(() => load(true), 3000)
-    } else {
-      clearInterval(interval)
     }
   }
 

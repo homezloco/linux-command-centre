@@ -172,10 +172,22 @@
           </div>
         {/each}
       </div>
+    {:else}
+      <div class="rounded-xl border border-border bg-card p-6 text-center space-y-2">
+        <HardDrive size={28} class="mx-auto text-muted-foreground/30" />
+        <p class="text-sm font-medium text-muted-foreground">No physical disks detected</p>
+        <p class="text-xs text-muted-foreground/60">Partition usage is shown below.</p>
+      </div>
     {/if}
 
     <!-- Partition Usage -->
     <div class="space-y-3">
+      {#if status.partitions.length === 0}
+        <div class="rounded-xl border border-border bg-card p-6 text-center space-y-2">
+          <Database size={28} class="mx-auto text-muted-foreground/30" />
+          <p class="text-sm font-medium text-muted-foreground">No partitions found</p>
+        </div>
+      {/if}
       {#each status.partitions as p}
         <div class="rounded-xl border border-border bg-card p-4 space-y-3">
           <div class="flex items-center justify-between">

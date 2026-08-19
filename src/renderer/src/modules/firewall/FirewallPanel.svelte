@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { ShieldCheck, RefreshCw, Plus, Trash2, Lock, AlertTriangle } from 'lucide-svelte'
   import Alert from '$lib/Alert.svelte'
 
@@ -34,16 +35,28 @@
     working = true; error = ''
     try {
       await invoke('firewall:addRule', newAction, newPort, newProto)
+      toasts.success(`${newAction.toUpperCase()} rule added for port ${newPort}/${newProto}`, 'Firewall')
       newPort = ''; addError = ''
       await loadRules()
-    } catch (e) { addError = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      addError = msg
+      toasts.error(msg, 'Firewall')
+    }
     finally { working = false }
   }
 
   async function deleteRule(num: number) {
     working = true; error = ''; confirmDelete = null
-    try { await invoke('firewall:deleteRule', num); await loadRules() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('firewall:deleteRule', num)
+      toasts.success(`Firewall rule ${num} deleted`, 'Firewall')
+      await loadRules()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Firewall')
+    }
     finally { working = false }
   }
 

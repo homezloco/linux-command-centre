@@ -186,7 +186,7 @@
             {#if timer.enabled === 'enabled'}
               <button
                 onclick={() => act(timer.name, 'disable')}
-                disabled={working !== null || timer.enabled === 'static'}
+                disabled={working !== null}
                 aria-label="Disable {timer.name}"
                 title="Disable at boot"
                 class="p-1.5 rounded hover:bg-secondary text-muted-foreground transition-colors disabled:opacity-40"

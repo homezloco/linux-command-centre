@@ -7,7 +7,7 @@
 
 'use strict'
 
-const { execFileSync, execSync, spawnSync } = require('child_process')
+const { execFileSync, execSync, spawnSync, spawn } = require('child_process')
 const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync } = require('fs')
 
 const [, , operation, ...args] = process.argv
@@ -30,6 +30,29 @@ function findBacklight() {
   if (!existsSync('/sys/class/backlight')) return null
   const entries = readdirSync('/sys/class/backlight')
   return entries.length > 0 ? `/sys/class/backlight/${entries[0]}` : null
+}
+
+function runApt(args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('apt-get', args, { env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => {
+      const s = d.toString()
+      stdout += s
+      process.stdout.write(d)
+    })
+    child.stderr.on('data', (d) => {
+      const s = d.toString()
+      stderr += s
+      process.stderr.write(d)
+    })
+    child.on('error', (err) => reject(err))
+    child.on('close', (code) => {
+      if (code === 0) resolve(stdout.trim())
+      else reject(new Error(stderr.trim() || `apt-get exited with status ${code}`))
+    })
+  })
 }
 
 const ops = {
@@ -326,21 +349,21 @@ const ops = {
     console.log(`Sent ${signal} to PID ${pidNum}`)
   },
 
-  'apt-upgrade'(packagesStr) {
+  async 'apt-upgrade'(packagesStr) {
     if (!packagesStr || packagesStr.length === 0) throw new Error('No packages specified')
     const packages = packagesStr.split(',').filter(p => p.length > 0 && /^[a-zA-Z0-9._+-]+$/.test(p))
     if (packages.length === 0) throw new Error('Invalid package names')
-    const output = execFileSync('apt-get', ['update'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
-    const upgradeOutput = execFileSync('apt-get', ['install', '--only-upgrade', '-y', ...packages], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'install', '--only-upgrade', '-y', ...packages], env)
     console.log(`Upgraded packages: ${packages.join(', ')}`)
-    console.log(output + upgradeOutput)
   },
 
-  'apt-upgrade-all'() {
-    const output = execFileSync('apt-get', ['update'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
-    const upgradeOutput = execFileSync('apt-get', ['upgrade', '-y'], { env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }, encoding: 'utf8' })
+  async 'apt-upgrade-all'() {
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'upgrade', '-y'], env)
     console.log('System upgrade completed')
-    console.log(output + upgradeOutput)
   },
 
   'user-add'(username, fullName) {
@@ -456,10 +479,12 @@ if (!ops[operation]) {
   process.exit(1)
 }
 
-try {
-  ops[operation](...args)
-  process.exit(0)
-} catch (e) {
-  console.error(`Error: ${e.message}`)
-  process.exit(1)
-}
+(async () => {
+  try {
+    await ops[operation](...args)
+    process.exit(0)
+  } catch (e) {
+    console.error(`Error: ${e.message || e}`)
+    process.exit(1)
+  }
+})()

@@ -25,6 +25,7 @@
   let speedInterval: ReturnType<typeof setInterval> | undefined
 
   async function load(force = false) {
+    if (refreshing || (force && loading)) return
     if (force) refreshing = true
     else loading = true
     error = ''

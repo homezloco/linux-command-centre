@@ -7,3 +7,6 @@ release/
 *.rpm
 *.tar.gz
 *.snap
+.env
+.env.local
+.env.*.local

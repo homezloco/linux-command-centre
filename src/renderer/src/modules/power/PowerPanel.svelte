@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { Zap, Battery, Gauge, Clock, Power, Monitor } from 'lucide-svelte'
 
   type PowerStatus = {
@@ -51,24 +52,52 @@
 
   async function setProfile(p: string) {
     setting = p; error = ''
-    try { await invoke('power:set', p); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('power:set', p)
+      toasts.success(`Power profile set to ${p}`, 'Power')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Power')
+    }
     finally { setting = '' }
   }
 
   async function setIdleDelay(seconds: number) {
-    try { await invoke('power:setIdleDelay', seconds); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('power:setIdleDelay', seconds)
+      toasts.success(`Screen blank set to ${formatSeconds(seconds)}`, 'Power')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Power')
+    }
   }
 
   async function setLidClose(ac: string, battery: string) {
-    try { await invoke('power:setLidClose', ac, battery); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('power:setLidClose', ac, battery)
+      toasts.success('Lid close action updated', 'Power')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Power')
+    }
   }
 
   async function setPowerButton(action: string) {
-    try { await invoke('power:setPowerButton', action); await load() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('power:setPowerButton', action)
+      toasts.success('Power button action updated', 'Power')
+      await load()
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Power')
+    }
   }
 
   function formatTime(minutes: number): string {
@@ -76,6 +105,13 @@
     const mins = minutes % 60
     if (hours > 0) return `${hours}h ${mins}m`
     return `${mins}m`
+  }
+
+  function formatSeconds(seconds: number): string {
+    if (seconds === 0) return 'Never'
+    if (seconds < 60) return `${seconds}s`
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+    return `${Math.round(seconds / 3600)}h`
   }
 
   onMount(load)
@@ -170,7 +206,7 @@
           <select
             id="lid-ac"
             value={status.lidCloseAc}
-            onchange={(e) => setLidClose((e.target as HTMLSelectElement).value, status.lidCloseBattery)}
+            onchange={(e) => setLidClose((e.target as HTMLSelectElement).value, status?.lidCloseBattery ?? 'suspend')}
             class="w-full text-xs rounded-md border border-border bg-secondary/50 px-2 py-1.5"
           >
             {#each lidActions as action}
@@ -183,7 +219,7 @@
           <select
             id="lid-bat"
             value={status.lidCloseBattery}
-            onchange={(e) => setLidClose(status.lidCloseAc, (e.target as HTMLSelectElement).value)}
+            onchange={(e) => setLidClose(status?.lidCloseAc ?? 'suspend', (e.target as HTMLSelectElement).value)}
             class="w-full text-xs rounded-md border border-border bg-secondary/50 px-2 py-1.5"
           >
             {#each lidActions as action}

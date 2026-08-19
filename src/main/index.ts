@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell, nativeTheme } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import './env'
 import { registerIpcHandlers } from './ipc'
 import { startStreamServer } from './stream-server'
 

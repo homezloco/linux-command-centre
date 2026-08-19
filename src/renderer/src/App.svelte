@@ -49,6 +49,7 @@
   import TimersPanel      from './modules/timers/TimersPanel.svelte'
   import DevicePanel      from './modules/device/DevicePanel.svelte'
   import CommandPalette   from '$lib/CommandPalette.svelte'
+  import Toaster          from '$lib/Toaster.svelte'
   import { invoke }      from '$lib/utils'
 
   type Mod = { id: string; label: string; icon: typeof Battery; component: typeof BatteryPanel }
@@ -244,3 +245,5 @@
     </div>
   </main>
 </div>
+
+<Toaster />

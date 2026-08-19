@@ -1,8 +1,9 @@
 import { ipcMain, net, app, clipboard } from 'electron'
 import { exec, spawn } from 'child_process'
 import { sysread, sysexists, run, runFile } from './shell'
-import { privilegedOp } from './privilege'
+import { privilegedOp, privilegedOpStreaming } from './privilege'
 import { selectProfile, evaluateProfile, type HwCheck } from './hardware-profiles'
+import { runDiagnostics } from './claude'
 import { existsSync } from 'fs'
 import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { homedir } from 'os'
@@ -175,7 +176,16 @@ export async function registerIpcHandlers(): Promise<void> {
     } catch {
       const profile = await sysread('/sys/firmware/acpi/platform_profile')
       const choices = await sysread('/sys/firmware/acpi/platform_profile_choices')
-      return { profile, profiles: choices.split(' ').filter(Boolean) }
+      return {
+        profile,
+        profiles: choices.split(' ').filter(Boolean),
+        idleDelay: 600,
+        lidCloseAc: 'nothing',
+        lidCloseBattery: 'suspend',
+        powerButton: 'interactive',
+        batteryTime: null,
+        batteryPower: null
+      }
     }
   })
 
@@ -213,22 +223,27 @@ export async function registerIpcHandlers(): Promise<void> {
       if (blocked) return { blocked, ssid: null, signal: null, security: null }
 
       // Use nmcli for richer connection info
-      const active = await run(
-        'nmcli -t -f NAME,TYPE,DEVICE,STATE connection show --active'
-      ).catch(() => '')
+      const active = await runFile('nmcli', ['-t', '-f', 'NAME,TYPE,DEVICE,STATE', 'connection', 'show', '--active'])
+        .catch(() => '')
       const wifiLine = active.split('\n').find(l => l.includes(':wifi:') || l.includes(':802-11-wireless:'))
-      const ssid = wifiLine?.split(':')[0] ?? await run('iwgetid -r').catch(() => null)
+      const ssid = wifiLine
+        ? splitTerse(wifiLine).slice(0, -3).join(':') || null
+        : await run('iwgetid -r').catch(() => null)
 
       // Signal + security of active network
       let signal: number | null = null
       let security: string | null = null
       if (ssid) {
-        const info = await run(`nmcli -t -f SSID,SIGNAL,SECURITY device wifi list`).catch(() => '')
-        const match = info.split('\n').find(l => l.startsWith(`${ssid}:`))
+        const info = await runFile('nmcli', ['-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'])
+          .catch(() => '')
+        const match = info.split('\n').find(l => {
+          const parts = splitTerse(l)
+          return parts.slice(0, parts.length - 2).join(':') === ssid
+        })
         if (match) {
-          const parts = match.split(':')
-          signal = parseInt(parts[1]) || null
-          security = parts[2] || null
+          const parts = splitTerse(match)
+          signal = parseInt(parts[parts.length - 2]) || null
+          security = parts[parts.length - 1] || null
         }
       }
       return { blocked, ssid, signal, security }
@@ -237,22 +252,44 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   })
 
+  function splitTerse(line: string, delim = ':'): string[] {
+    const parts: string[] = []
+    let current = ''
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      const next = line[i + 1]
+      if (ch === '\\' && next === delim) {
+        current += delim
+        i++
+      } else if (ch === delim) {
+        parts.push(current)
+        current = ''
+      } else {
+        current += ch
+      }
+    }
+    parts.push(current)
+    return parts
+  }
+
   ipcMain.handle('wifi:scan', async () => {
     try {
       // Trigger a rescan (may fail silently if too frequent)
-      await run('nmcli device wifi rescan').catch(() => {})
+      await runFile('nmcli', ['device', 'wifi', 'rescan']).catch(() => {})
       await new Promise(r => setTimeout(r, 800))
 
-      const out = await run('nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,BSSID device wifi list')
+      const out = await runFile('nmcli', ['-t', '-f', 'IN-USE,SSID,SIGNAL,SECURITY,BSSID', 'device', 'wifi', 'list'])
       const networks: { ssid: string; signal: number; security: string; bssid: string; active: boolean }[] = []
       const seen = new Set<string>()
 
       for (const line of out.split('\n')) {
-        const parts = line.split(':')
+        const parts = splitTerse(line)
         if (parts.length < 5) continue
-        const [inUse, ssid, signalStr, security, ...bssidParts] = parts
-        const bssid = bssidParts.join(':')
-        const signal = parseInt(signalStr) || 0
+        const inUse = parts[0]
+        const signal = parseInt(parts[parts.length - 3]) || 0
+        const security = parts[parts.length - 2] || 'Open'
+        const bssid = parts[parts.length - 1]
+        const ssid = parts.slice(1, parts.length - 3).join(':')
         if (!ssid || seen.has(ssid)) continue
         seen.add(ssid)
         networks.push({ ssid, signal, security: security || 'Open', bssid, active: inUse === '*' })
@@ -358,21 +395,24 @@ export async function registerIpcHandlers(): Promise<void> {
       if (!blocked) {
         try {
           // List all paired devices
-          const pairedOut = await run('bluetoothctl devices')
+          const pairedOut = await runFile('bluetoothctl', ['devices'])
           const macs = [...pairedOut.matchAll(/Device\s+([0-9A-F:]{17})\s+(.+)/gi)]
             .map(m => ({ mac: m[1], name: m[2].trim() }))
 
-          // Check connection state for each
-          for (const { mac, name } of macs) {
-            try {
-              const info = await runFile('bluetoothctl', ['info', mac])
-              const connected = /Connected:\s+yes/i.test(info)
-              const type = info.match(/Icon:\s+(\S+)/i)?.[1] ?? 'unknown'
-              devices.push({ mac, name, connected, type })
-            } catch {
-              devices.push({ mac, name, connected: false, type: 'unknown' })
-            }
-          }
+          // Check connection state in parallel
+          const enriched = await Promise.all(
+            macs.map(async ({ mac, name }) => {
+              try {
+                const info = await runFile('bluetoothctl', ['info', mac])
+                const connected = /Connected:\s+yes/i.test(info)
+                const type = info.match(/Icon:\s+(\S+)/i)?.[1] ?? 'unknown'
+                return { mac, name, connected, type }
+              } catch {
+                return { mac, name, connected: false, type: 'unknown' }
+              }
+            })
+          )
+          devices.push(...enriched)
         } catch { /* bluetoothctl not available */ }
       }
 
@@ -407,14 +447,23 @@ export async function registerIpcHandlers(): Promise<void> {
   }
 
   ipcMain.handle('bluetooth:scan', async () => {
+    let scanProc: ReturnType<typeof spawn> | null = null
     try {
-      const scanProc = exec('bluetoothctl scan on 2>/dev/null')
-      await new Promise(r => setTimeout(r, 6000))
-      scanProc.kill()
-      await run('bluetoothctl scan off').catch(() => {})
+      scanProc = spawn('bluetoothctl', ['scan', 'on'], { stdio: 'ignore' })
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          scanProc?.kill('SIGTERM')
+          resolve()
+        }, 6000)
+        scanProc?.on('close', () => {
+          clearTimeout(t)
+          resolve()
+        })
+      })
+      await runFile('bluetoothctl', ['scan', 'off']).catch(() => {})
 
-      const allOut = await run('bluetoothctl devices').catch(() => '')
-      const pairedOut = await run('bluetoothctl devices Paired').catch(() => '')
+      const allOut = await runFile('bluetoothctl', ['devices']).catch(() => '')
+      const pairedOut = await runFile('bluetoothctl', ['devices', 'Paired']).catch(() => '')
 
       const parseDevices = (out: string) =>
         [...out.matchAll(/Device\s+([0-9A-F:]{17})\s+(.+)/gi)]
@@ -424,7 +473,7 @@ export async function registerIpcHandlers(): Promise<void> {
       const pairedMacs = new Set(parseDevices(pairedOut).map(d => d.mac))
       const unpaired = all.filter(d => !pairedMacs.has(d.mac))
 
-      // Enrich with detailed info
+      // Enrich with detailed info in parallel
       const enriched = await Promise.all(
         unpaired.map(async (d) => {
           const info = await getDeviceInfo(d.mac)
@@ -446,6 +495,8 @@ export async function registerIpcHandlers(): Promise<void> {
       })
     } catch {
       return []
+    } finally {
+      scanProc?.kill('SIGTERM')
     }
   })
 
@@ -1009,7 +1060,7 @@ export async function registerIpcHandlers(): Promise<void> {
 
       // Get upgradeable packages
       const out = await run('apt list --upgradable 2>/dev/null').catch(() => '')
-      const packages: PackageUpdate[] = []
+      const rawPackages: { name: string; newVer: string; oldVer: string }[] = []
 
       for (const line of out.split('\n')) {
         if (!line.includes('upgradable from:')) continue
@@ -1019,25 +1070,62 @@ export async function registerIpcHandlers(): Promise<void> {
 
         const [, name, newVer, oldVer] = match
         if (!/^[a-zA-Z0-9._+-]+$/.test(name)) continue
+        rawPackages.push({ name, newVer, oldVer })
+      }
 
-        // Check if security update
-        const policy = await runFile('apt-cache', ['policy', name]).catch(() => '')
-        const isSecurity = policy.includes('-security') || policy.includes('security.ubuntu.com')
+      if (rawPackages.length === 0) return []
 
-        // Get size from apt-cache
-        const show = await runFile('apt-cache', ['show', name]).catch(() => '')
-        const sizeMatch = show.match(/^Size:\s+(\d+)/m)
-        const size = sizeMatch ? formatBytes(parseInt(sizeMatch[1])) : 'Unknown'
+      const names = rawPackages.map(p => p.name)
 
-        packages.push({
+      // Batch fetch policy and show info for all packages
+      const policyText = await runFile('apt-cache', ['policy', ...names]).catch(() => '')
+      const showText = await runFile('apt-cache', ['show', ...names], { maxBuffer: 10 * 1024 * 1024 }).catch(() => '')
+
+      // Parse policy per package to detect security origin
+      const policyBlocks: Record<string, string> = {}
+      let currentPkg: string | null = null
+      for (const line of policyText.split('\n')) {
+        const pkgMatch = line.match(/^([a-zA-Z0-9._+-]+):$/)
+        if (pkgMatch) {
+          currentPkg = pkgMatch[1]
+          policyBlocks[currentPkg] = ''
+          continue
+        }
+        if (currentPkg) policyBlocks[currentPkg] += line + '\n'
+      }
+
+      // Parse show records for Size
+      const sizeMap: Record<string, string> = {}
+      let recordName: string | null = null
+      let recordSize: string | null = null
+      for (const line of showText.split('\n')) {
+        if (line.trim() === '') {
+          if (recordName && recordSize) sizeMap[recordName] = recordSize
+          recordName = null
+          recordSize = null
+          continue
+        }
+        const nameMatch = line.match(/^Package:\s*(\S+)/)
+        if (nameMatch) recordName = nameMatch[1]
+        const sizeMatch = line.match(/^Size:\s*(\d+)/)
+        if (sizeMatch) recordSize = sizeMatch[1]
+      }
+      if (recordName && recordSize) sizeMap[recordName] = recordSize
+
+      const packages: PackageUpdate[] = rawPackages.map(({ name, newVer, oldVer }) => {
+        const policy = policyBlocks[name] || ''
+        const isSecurity = policy.includes('-security') || policy.includes('security.ubuntu.com') || policy.includes('security.debian.org')
+        const sizeBytes = sizeMap[name]
+        const size = sizeBytes ? formatBytes(parseInt(sizeBytes)) : 'Unknown'
+        return {
           name,
           currentVersion: oldVer,
           newVersion: newVer,
           size,
           isSecurity,
           source: isSecurity ? 'Security' : 'Regular'
-        })
-      }
+        }
+      })
 
       return packages.sort((a, b) => (b.isSecurity ? 1 : 0) - (a.isSecurity ? 1 : 0))
     } catch {
@@ -1081,15 +1169,17 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   })
 
-  ipcMain.handle('updates:upgrade', async (_, packages?: string[]) => {
+  ipcMain.handle('updates:upgrade', async (event, packages?: string[]) => {
     try {
-      if (packages && packages.length > 0) {
-        return await privilegedOp('apt-upgrade', packages.join(','))
-      }
-      return await privilegedOp('apt-upgrade-all')
+      const operation = packages && packages.length > 0 ? 'apt-upgrade' : 'apt-upgrade-all'
+      const args = packages && packages.length > 0 ? [packages.join(',')] : []
+      return await privilegedOpStreaming(operation, args, (output) => {
+        if (!event.sender.isDestroyed()) event.sender.send('updates:progress', output)
+      })
     } catch (err) {
       console.error('updates:upgrade failed:', err)
-      throw new Error(`Upgrade failed: ${String(err)}`)
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(`Upgrade failed: ${message}`)
     }
   })
 
@@ -1808,6 +1898,13 @@ export async function registerIpcHandlers(): Promise<void> {
     return { partitions, blockDevices, smart: smartResults }
   })
 
+  // ── AI Diagnostics ────────────────────────────────────────────────────────
+  ipcMain.handle('ai:diagnose', async (_, query: string) => {
+    if (typeof query !== 'string' || !query.trim()) throw new Error('A question is required')
+    if (query.length > 2000) throw new Error('Question is too long')
+    return runDiagnostics(query.trim())
+  })
+
   // ── System Overview ────────────────────────────────────────────────────────
   ipcMain.handle('system:status', async () => {
     // Hostname & OS
@@ -1845,7 +1942,7 @@ export async function registerIpcHandlers(): Promise<void> {
       return result
     }
     const allT1 = await getCpuAllTimes()
-    await new Promise<void>(r => setTimeout(r, 150))
+    await new Promise<void>(r => setTimeout(r, 500))
     const allT2 = await getCpuAllTimes()
 
     const cpuDelta = (name: string) => {

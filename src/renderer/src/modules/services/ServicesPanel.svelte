@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, Play, Square, RotateCcw, Search } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -29,9 +30,16 @@
 
   async function act(name: string, action: string) {
     working = `${name}:${action}`; error = ''
-    try { await invoke('services:action', name, action); await load(true) }
-    catch (e) { error = String(e) }
-    finally { working = null }
+    try {
+      await invoke('services:action', name, action)
+      const pastTense = action === 'stop' ? 'stopped' : `${action}ed`
+      toasts.success(`${shortUnit(name)} ${pastTense}`, 'Services')
+      await load(true)
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, `Failed to ${action} service`)
+    } finally { working = null }
   }
 
   const filtered = $derived(

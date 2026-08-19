@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, ShieldCheck, ShieldOff, Wifi, Lock, Plus, Trash2, X, Globe, FileKey, Upload, Key, Eye, EyeOff, Copy, Check } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -55,11 +56,17 @@
     try {
       if (conn.active) {
         await invoke('vpn:disconnect', conn.name)
+        toasts.success(`Disconnected ${conn.name}`, 'VPN')
       } else {
         await invoke('vpn:connect', conn.name)
+        toasts.success(`Connected ${conn.name}`, 'VPN')
       }
       await load(true)
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'VPN')
+    }
     finally { toggling = null }
   }
 
@@ -77,8 +84,13 @@
     error = ''
     try {
       await invoke('vpn:delete', name)
+      toasts.success(`Deleted VPN profile ${name}`, 'VPN')
       await load(true)
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'VPN')
+    }
     finally { deleting = null }
   }
 
@@ -207,9 +219,12 @@
         })
       }
       showCreateDialog = false
+      toasts.success(`Created ${createType === 'wireguard' ? 'WireGuard' : 'OpenVPN'} profile ${createName.trim()}`, 'VPN')
       await load(true)
     } catch (e) {
-      createError = String(e)
+      const msg = String(e)
+      createError = msg
+      toasts.error(msg, 'VPN')
     } finally {
       creating = false
     }

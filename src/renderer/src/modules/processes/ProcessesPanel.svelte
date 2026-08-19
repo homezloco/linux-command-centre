@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, X, AlertTriangle, Search } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -21,6 +22,7 @@
   let interval: ReturnType<typeof setInterval> | undefined
 
   async function load(force = false) {
+    if (refreshing || (force && loading)) return
     if (force) refreshing = true
     else loading = true
     error = ''
@@ -35,8 +37,13 @@
     confirmKill = null
     try {
       await invoke('processes:kill', pid, signal)
+      toasts.success(`Sent ${signal === 'KILL' ? 'SIGKILL' : 'SIGTERM'} to PID ${pid}`, 'Processes')
       await load(true)
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'Processes')
+    }
     finally { killing = null }
   }
 
@@ -67,14 +74,16 @@
       : procs
   )
 
-  $effect(() => {
-    void sortBy
-    load(true)
-  })
-
+  let mounted = false
   onMount(() => {
+    mounted = true
     load()
     interval = setInterval(() => load(true), 4000)
+  })
+
+  $effect(() => {
+    void sortBy
+    if (mounted) load(true)
   })
   onDestroy(() => clearInterval(interval))
 </script>
@@ -208,8 +217,9 @@
               <button
                 onclick={() => confirmKill = { pid: proc.pid, name: proc.name, signal: 'TERM' }}
                 aria-label="Kill process {proc.name}"
-                class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10
-                       hover:text-destructive text-muted-foreground transition-all"
+                class="opacity-100 focus:opacity-100 p-1 rounded hover:bg-destructive/10
+                       hover:text-destructive text-muted-foreground transition-all
+                       sm:opacity-0 sm:group-hover:opacity-100"
               >
                 <X size={13} />
               </button>

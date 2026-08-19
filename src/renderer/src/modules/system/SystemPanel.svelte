@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers } from 'lucide-svelte'
+  import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers, Sparkles, Send } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -28,6 +28,7 @@
   let history = $state<{ cpu: number; mem: number }[]>([])
 
   async function load(force = false) {
+    if (refreshing || (force && loading)) return
     if (force) refreshing = true
     else loading = true
     error = ''
@@ -91,6 +92,31 @@
 
   onMount(() => { load(); interval = setInterval(() => load(true), 5000) })
   onDestroy(() => clearInterval(interval))
+
+  // ── AI Diagnostics ──────────────────────────────────────────────────────
+  let aiQuery    = $state('')
+  let aiAsking   = $state(false)
+  let aiError    = $state('')
+  let aiAnswer   = $state('')
+  let aiTools    = $state<string[]>([])
+
+  async function askAi() {
+    const q = aiQuery.trim()
+    if (!q || aiAsking) return
+    aiAsking = true
+    aiError = ''
+    aiAnswer = ''
+    aiTools = []
+    try {
+      const result = await invoke<{ text: string; toolsUsed: string[] }>('ai:diagnose', q)
+      aiAnswer = result.text
+      aiTools = [...new Set(result.toolsUsed)]
+    } catch (e) {
+      aiError = String(e)
+    } finally {
+      aiAsking = false
+    }
+  }
 </script>
 
 {#if loading}
@@ -126,6 +152,59 @@
         <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
         Refresh
       </button>
+    </div>
+
+    <!-- AI Diagnostics -->
+    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div class="flex items-center gap-2">
+        <div class="p-1.5 rounded-lg bg-primary/10 text-primary">
+          <Sparkles size={14} />
+        </div>
+        <p class="text-sm font-medium">Ask AI why something's off</p>
+      </div>
+
+      <form
+        class="flex items-center gap-2"
+        onsubmit={(e) => { e.preventDefault(); askAi() }}
+      >
+        <input
+          type="text"
+          bind:value={aiQuery}
+          disabled={aiAsking}
+          placeholder="e.g. why is my system running slow?"
+          class="flex-1 min-w-0 text-xs px-3 py-2 rounded-md bg-secondary/40 border border-border
+                 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary
+                 disabled:opacity-50"
+        />
+        <button
+          type="submit"
+          disabled={aiAsking || !aiQuery.trim()}
+          class="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-border
+                 hover:bg-secondary transition-colors disabled:opacity-50 shrink-0"
+        >
+          {#if aiAsking}
+            <RefreshCw size={12} class="animate-spin" />
+          {:else}
+            <Send size={12} />
+          {/if}
+          Ask
+        </button>
+      </form>
+
+      {#if aiError}
+        <Alert message={aiError} />
+      {:else if aiAnswer}
+        <div class="rounded-lg bg-secondary/40 p-3 space-y-2">
+          <p class="text-xs leading-relaxed whitespace-pre-wrap">{aiAnswer}</p>
+          {#if aiTools.length > 0}
+            <div class="flex flex-wrap gap-1.5 pt-1 border-t border-border/60">
+              {#each aiTools as tool}
+                <span class="text-[9px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground/70">{tool}</span>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- Info row -->

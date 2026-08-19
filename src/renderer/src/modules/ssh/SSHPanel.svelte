@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, Key, Plus, Trash2, Copy, CheckCircle2, AlertTriangle, Shield } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
@@ -49,16 +50,26 @@
     try {
       await invoke('clipboard:write', key.publicKey)
       copied = key.name
+      toasts.success('Public key copied to clipboard', 'SSH Keys')
       setTimeout(() => { if (copied === key.name) copied = null }, 2000)
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'SSH Keys')
+    }
   }
 
   async function deleteKey(name: string) {
     try {
       await invoke('ssh:deleteKey', name)
       confirmDelete = null
+      toasts.success(`Deleted key ${name}`, 'SSH Keys')
       await load()
-    } catch (e) { error = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      error = msg
+      toasts.error(msg, 'SSH Keys')
+    }
   }
 
   async function generateKey() {
@@ -69,8 +80,13 @@
     try {
       await invoke('ssh:generate', genType, genComment || `${genName}@lcc`, genName.trim())
       showGen = false; genName = ''; genComment = ''
+      toasts.success(`Generated ${genType} key`, 'SSH Keys')
       await load()
-    } catch (e) { genError = String(e) }
+    } catch (e) {
+      const msg = String(e)
+      genError = msg
+      toasts.error(msg, 'SSH Keys')
+    }
     finally { genLoading = false }
   }
 

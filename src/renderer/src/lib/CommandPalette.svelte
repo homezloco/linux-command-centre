@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte'
-  import { Search, ArrowRight } from 'lucide-svelte'
+  import { Search, ArrowRight, Icon } from 'lucide-svelte'
 
-  type Item = { id: string; label: string; group: string; icon: unknown }
+  type Item = { id: string; label: string; group: string; icon: typeof Icon }
 
   let { items, onselect }: { items: Item[]; onselect: (id: string) => void } = $props()
 
@@ -30,20 +30,37 @@
     query = ''
   }
 
+  function typingInInput(e: KeyboardEvent): boolean {
+    const target = e.target as HTMLElement | null
+    if (!target) return false
+    const tag = target.tagName?.toLowerCase()
+    const isEditable = target.isContentEditable
+    const isTextInput = tag === 'input' || tag === 'textarea' || tag === 'select'
+    return isTextInput || isEditable
+  }
+
   async function handleKeydown(e: KeyboardEvent) {
-    // Open: Ctrl+K or just '/' when not typing in an input
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-      e.preventDefault()
-      open = !open
-      if (open) { await tick(); inputEl?.focus() }
+    // Navigation inside palette
+    if (open) {
+      if (e.key === 'Escape')    { e.preventDefault(); open = false; query = '' }
+      if (e.key === 'ArrowDown') { e.preventDefault(); cursor = (cursor + 1) % results.length; scrollCursor() }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); cursor = (cursor - 1 + results.length) % results.length; scrollCursor() }
+      if (e.key === 'Enter' && results[cursor]) { e.preventDefault(); select(results[cursor].id) }
       return
     }
-    if (!open) return
 
-    if (e.key === 'Escape')    { open = false; query = '' }
-    if (e.key === 'ArrowDown') { e.preventDefault(); cursor = (cursor + 1) % results.length; scrollCursor() }
-    if (e.key === 'ArrowUp')   { e.preventDefault(); cursor = (cursor - 1 + results.length) % results.length; scrollCursor() }
-    if (e.key === 'Enter' && results[cursor]) select(results[cursor].id)
+    // Open shortcuts: Ctrl/Cmd+K or '/' when not typing in a field
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault()
+      open = true
+      await tick(); inputEl?.focus()
+      return
+    }
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !typingInInput(e)) {
+      e.preventDefault()
+      open = true
+      await tick(); inputEl?.focus()
+    }
   }
 
   function scrollCursor() {
@@ -86,14 +103,14 @@
         <p class="px-4 py-6 text-center text-sm text-muted-foreground">No results</p>
       {:else}
         {#each results as item, i}
+          {@const Icon = item.icon}
           <button
             onclick={() => select(item.id)}
             onmouseenter={() => cursor = i}
             class="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors
                    {cursor === i ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/50'}"
           >
-            <!-- svelte-ignore component_name_lowercase -->
-            <item.icon size={14} class="shrink-0 {cursor === i ? 'text-primary' : 'text-muted-foreground'}" />
+            <Icon size={14} class="shrink-0 {cursor === i ? 'text-primary' : 'text-muted-foreground'}" />
             <span class="flex-1 text-sm">{item.label}</span>
             <span class="text-[10px] text-muted-foreground">{item.group}</span>
             {#if cursor === i}
