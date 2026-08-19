@@ -2122,7 +2122,7 @@ export async function registerIpcHandlers(): Promise<void> {
       }
     }
 
-    type JEntry = { pid: number | null; priority: number; unit: string; message: string; timestamp: number; identifier: string }
+    type JEntry = { pid: number | null; priority: number; unit: string; message: string; timestamp: number; identifier: string; cursor: string }
     const entries: JEntry[] = []
     for (const line of out.split('\n')) {
       if (!line.startsWith('{')) continue
@@ -2135,6 +2135,7 @@ export async function registerIpcHandlers(): Promise<void> {
           message:   Array.isArray(j.MESSAGE) ? Buffer.from(j.MESSAGE).toString('utf8') : String(j.MESSAGE ?? ''),
           timestamp: Math.floor(parseInt(j.__REALTIME_TIMESTAMP ?? '0') / 1000),
           identifier: j.SYSLOG_IDENTIFIER ?? '',
+          cursor:    j.__CURSOR ?? '',
         })
       } catch { /* skip malformed lines */ }
     }

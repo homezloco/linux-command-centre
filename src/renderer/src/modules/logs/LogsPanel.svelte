@@ -7,7 +7,7 @@
 
   type LogEntry = {
     pid: number | null; priority: number; unit: string
-    message: string; timestamp: number; identifier: string
+    message: string; timestamp: number; identifier: string; cursor: string
   }
 
   // priority labels & styles
@@ -214,7 +214,7 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-border/50">
-            {#each entries as entry (entry.timestamp + entry.message.slice(0, 20))}
+            {#each entries as entry, i (entry.cursor || i)}
               <tr class="hover:bg-secondary/30 transition-colors group">
                 <td class="px-3 py-1.5 text-muted-foreground/60 font-mono whitespace-nowrap">{fmtTime(entry.timestamp)}</td>
                 <td class="px-2 py-1.5 font-mono whitespace-nowrap {priorityClass(entry.priority)}">{priorityLabel(entry.priority)}</td>
