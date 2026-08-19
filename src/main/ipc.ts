@@ -2893,7 +2893,13 @@ export async function registerIpcHandlers(): Promise<void> {
 
   async function desktopName(desktopFile: string): Promise<string> {
     if (!desktopFile) return ''
-    const dirs = ['/usr/share/applications', `${homedir()}/.local/share/applications`]
+    const dirs = [
+      '/usr/share/applications',
+      `${homedir()}/.local/share/applications`,
+      '/var/lib/snapd/desktop/applications',
+      '/var/lib/flatpak/exports/share/applications',
+      `${homedir()}/.local/share/flatpak/exports/share/applications`
+    ]
     for (const dir of dirs) {
       const content = await readFile(`${dir}/${desktopFile}`, 'utf8').catch(() => '')
       const m = content.match(/^Name=(.+)$/m)
@@ -2903,7 +2909,13 @@ export async function registerIpcHandlers(): Promise<void> {
   }
 
   async function appsForMime(mime: string): Promise<{ id: string; name: string }[]> {
-    const dirs = ['/usr/share/applications', `${homedir()}/.local/share/applications`]
+    const dirs = [
+      '/usr/share/applications',
+      `${homedir()}/.local/share/applications`,
+      '/var/lib/snapd/desktop/applications',
+      '/var/lib/flatpak/exports/share/applications',
+      `${homedir()}/.local/share/flatpak/exports/share/applications`
+    ]
     const apps: { id: string; name: string }[] = []
     const seen = new Set<string>()
     for (const dir of dirs) {
