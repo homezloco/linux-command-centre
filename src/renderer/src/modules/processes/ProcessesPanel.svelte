@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { flip } from 'svelte/animate'
+  import { fade } from 'svelte/transition'
   import { invoke } from '$lib/utils'
   import { toasts } from '$stores/toasts'
   import { RefreshCw, X, AlertTriangle, Search } from 'lucide-svelte'
@@ -21,13 +23,31 @@
   let confirmKill = $state<{ pid: number; name: string; signal: 'TERM' | 'KILL' } | null>(null)
   let interval: ReturnType<typeof setInterval> | undefined
 
-  async function load(force = false) {
+  // On background polls, update values in place and keep row order stable —
+  // re-sorting every 4s just because a near-zero-CPU process ticked up 0.1%
+  // makes the whole list constantly reshuffle. Only re-sort on an explicit
+  // action (manual refresh, sort toggle, after a kill).
+  function mergeInPlace(current: Process[], fresh: Process[]): Process[] {
+    const freshByPid = new Map(fresh.map(p => [p.pid, p]))
+    const merged: Process[] = []
+    for (const p of current) {
+      const updated = freshByPid.get(p.pid)
+      if (updated) { merged.push(updated); freshByPid.delete(p.pid) }
+    }
+    for (const p of fresh) {
+      if (freshByPid.has(p.pid)) merged.push(p)   // genuinely new PIDs, appended
+    }
+    return merged
+  }
+
+  async function load(force = false, merge = false) {
     if (refreshing || (force && loading)) return
     if (force) refreshing = true
     else loading = true
     error = ''
     try {
-      procs = await invoke<Process[]>('processes:list', sortBy)
+      const fresh = await invoke<Process[]>('processes:list', sortBy)
+      procs = merge && procs.length > 0 ? mergeInPlace(procs, fresh) : fresh
     } catch (e) { error = String(e) }
     finally { loading = false; refreshing = false }
   }
@@ -78,7 +98,7 @@
   onMount(() => {
     mounted = true
     load()
-    interval = setInterval(() => load(true), 4000)
+    interval = setInterval(() => load(true, true), 4000)
   })
 
   $effect(() => {
@@ -175,14 +195,17 @@
     <!-- Process rows -->
     <div class="space-y-1">
       {#each filtered as proc (proc.pid)}
-        <div class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 items-center
+        <div
+          animate:flip={{ duration: 250 }}
+          transition:fade={{ duration: 150 }}
+          class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 items-center
                     rounded-lg border border-border bg-card px-3 py-2
                     hover:border-border/80 transition-colors group">
 
           <!-- Name + PID + bar -->
           <div class="min-w-0">
             <div class="flex items-baseline gap-2">
-              <span class="text-sm font-medium truncate">{proc.name}</span>
+              <span class="text-sm font-medium truncate" title={proc.command}>{proc.name}</span>
               <span class="text-[10px] text-muted-foreground shrink-0">PID {proc.pid}</span>
             </div>
             <div class="flex items-center gap-1 mt-1">

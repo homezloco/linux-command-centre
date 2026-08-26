@@ -2181,7 +2181,15 @@ export async function registerIpcHandlers(): Promise<void> {
       const p = line.trim().split(/\s+/)
       if (p.length < 11) continue
       const command = p.slice(10).join(' ')
-      const name = command.replace(/^-/, '').split(/[\s/]/).pop()?.split('?')[0] || command.slice(0, 20)
+      // Kernel threads render as "[name]" — leave them intact. Everything
+      // else: take argv0 (first token) and basename it, not the last CLI arg.
+      let name: string
+      if (command.startsWith('[') && command.endsWith(']')) {
+        name = command
+      } else {
+        const argv0 = command.split(/\s+/)[0] || command
+        name = argv0.split('/').pop() || argv0
+      }
       procs.push({
         pid: parseInt(p[1]) || 0,
         user: p[0],
@@ -2190,8 +2198,8 @@ export async function registerIpcHandlers(): Promise<void> {
         vsz: parseInt(p[4]) || 0,
         rss: parseInt(p[5]) * 1024 || 0,
         stat: p[7],
-        command: command.slice(0, 80),
-        name: name.slice(0, 20)
+        command: command.slice(0, 200),
+        name
       })
     }
     return procs
