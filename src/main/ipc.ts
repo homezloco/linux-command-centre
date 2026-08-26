@@ -1993,6 +1993,122 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   })
 
+  // ── System Specs (static hardware details) ──────────────────────────────────
+  const CHASSIS_TYPES: Record<number, string> = {
+    3: 'Desktop', 4: 'Low Profile Desktop', 5: 'Pizza Box', 6: 'Mini Tower', 7: 'Tower',
+    8: 'Portable', 9: 'Laptop', 10: 'Notebook', 11: 'Hand Held', 12: 'Docking Station',
+    13: 'All in One', 14: 'Sub Notebook', 15: 'Space-saving', 16: 'Lunch Box',
+    17: 'Main Server Chassis', 21: 'Peripheral Chassis', 23: 'Rack Mount Chassis',
+    24: 'Sealed-case PC', 28: 'Blade', 30: 'Tablet', 31: 'Convertible', 32: 'Detachable',
+    34: 'Embedded PC', 35: 'Mini PC', 36: 'Stick PC'
+  }
+
+  ipcMain.handle('system:specs', async () => {
+    const dmi = async (key: string) => (await sysread(`/sys/class/dmi/id/${key}`).catch(() => '')).trim()
+    const [vendor, model, version, family, sku,
+      boardVendor, boardName, boardVersion,
+      biosVendor, biosVersion, biosDate,
+      chassisTypeRaw] = await Promise.all([
+      dmi('sys_vendor'), dmi('product_name'), dmi('product_version'), dmi('product_family'), dmi('product_sku'),
+      dmi('board_vendor'), dmi('board_name'), dmi('board_version'),
+      dmi('bios_vendor'), dmi('bios_version'), dmi('bios_date'),
+      dmi('chassis_type')
+    ])
+    const chassis = CHASSIS_TYPES[parseInt(chassisTypeRaw)] || 'Unknown'
+
+    // CPU details via lscpu -J (flatten in case of nested "children" sections)
+    const lscpuOut = await run('lscpu -J').catch(() => '')
+    const fields: Record<string, string> = {}
+    try {
+      const parsed = JSON.parse(lscpuOut)
+      const flatten = (entries: { field?: string; data?: string; children?: unknown[] }[]) => {
+        for (const e of entries) {
+          if (e.field && e.data != null) fields[e.field.replace(/:$/, '')] = String(e.data)
+          if (e.children) flatten(e.children as typeof entries)
+        }
+      }
+      flatten(parsed.lscpu || [])
+    } catch { /* lscpu unavailable */ }
+
+    const cpuInfo = await readFile('/proc/cpuinfo', 'utf8').catch(() => '')
+    const cpuModelFallback = cpuInfo.match(/^model name\s*:\s*(.+)/m)?.[1]?.trim() ?? 'Unknown CPU'
+    const numOr = (s: string | undefined) => (s != null && s !== '' ? parseFloat(s) : null)
+    const sockets = numOr(fields['Socket(s)']) ?? 1
+    const coresPerSocket = numOr(fields['Core(s) per socket']) ?? 0
+    const threadsPerCore = numOr(fields['Thread(s) per core']) ?? 1
+
+    const cpu = {
+      model: fields['Model name'] || cpuModelFallback,
+      vendor: fields['Vendor ID'] || '',
+      architecture: fields['Architecture'] || '',
+      sockets,
+      coresPerSocket,
+      threadsPerCore,
+      totalCores: sockets * coresPerSocket,
+      totalThreads: (cpuInfo.match(/^processor\s*:/gm) || []).length,
+      maxMhz: numOr(fields['CPU max MHz']),
+      minMhz: numOr(fields['CPU min MHz']),
+      virtualization: fields['Virtualization'] || '',
+      caches: {
+        l1d: fields['L1d cache'] || '',
+        l1i: fields['L1i cache'] || '',
+        l2: fields['L2 cache'] || '',
+        l3: fields['L3 cache'] || ''
+      }
+    }
+
+    // GPUs via lspci
+    const lspciOut = await run('lspci -k').catch(() => '')
+    const gpus: { description: string; driver: string }[] = []
+    const lspciLines = lspciOut.split('\n')
+    for (let i = 0; i < lspciLines.length; i++) {
+      const m = lspciLines[i].match(/^\S+\s+(?:VGA compatible controller|3D controller|Display controller):\s*(.+)$/)
+      if (!m) continue
+      let driver = ''
+      for (let j = i + 1; j < lspciLines.length && /^\s/.test(lspciLines[j]); j++) {
+        const dm = lspciLines[j].match(/Kernel driver in use:\s*(.+)/)
+        if (dm) { driver = dm[1].trim(); break }
+      }
+      gpus.push({ description: m[1].trim(), driver })
+    }
+
+    return {
+      vendor, model, version, family, sku,
+      board: { vendor: boardVendor, name: boardName, version: boardVersion },
+      bios: { vendor: biosVendor, version: biosVersion, date: biosDate },
+      chassis,
+      cpu,
+      gpus
+    }
+  })
+
+  // Per-DIMM memory detail requires reading raw DMI tables — root only.
+  ipcMain.handle('system:memoryDetails', async () => {
+    const out = await privilegedOp('dmidecode-memory')
+    type Dimm = { locator: string; size: string; speed: string; type: string; manufacturer: string; partNumber: string }
+    const dimms: Dimm[] = []
+    let arraySlots = 0
+    for (const block of out.split(/\n(?=Handle )/)) {
+      if (/Physical Memory Array/.test(block)) {
+        arraySlots += parseInt(block.match(/Number Of Devices:\s*(\d+)/)?.[1] ?? '0') || 0
+        continue
+      }
+      if (!/^Memory Device\b/m.test(block)) continue
+      const get = (key: string) => block.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, 'm'))?.[1]?.trim() ?? ''
+      const size = get('Size')
+      if (!size || /no module installed/i.test(size)) continue
+      dimms.push({
+        locator: get('Locator'),
+        size,
+        speed: get('Configured Memory Speed') || get('Speed'),
+        type: get('Type'),
+        manufacturer: get('Manufacturer'),
+        partNumber: get('Part Number')
+      })
+    }
+    return { slotsTotal: arraySlots, slotsUsed: dimms.length, dimms }
+  })
+
   // ── Network ────────────────────────────────────────────────────────────────
   ipcMain.handle('network:status', async () => {
     // Interfaces from `ip -j addr`

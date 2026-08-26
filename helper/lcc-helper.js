@@ -398,6 +398,11 @@ const ops = {
     process.stdout.write(out)
   },
 
+  'dmidecode-memory'() {
+    const out = execFileSync('dmidecode', ['-t', 'memory'], { encoding: 'utf8', maxBuffer: 1024 * 1024 })
+    process.stdout.write(out)
+  },
+
   'firewall-rule-add'(action, port, proto) {
     if (!['allow', 'deny', 'reject'].includes(action)) throw new Error('Invalid action')
     if (!/^\d+$/.test(port) || parseInt(port) > 65535) throw new Error('Invalid port')

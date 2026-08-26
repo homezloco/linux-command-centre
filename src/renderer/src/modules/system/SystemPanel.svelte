@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers, Sparkles, Send } from 'lucide-svelte'
+  import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers, Sparkles, Send,
+           CircuitBoard, MonitorPlay, Eye, ChevronDown } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -12,6 +13,27 @@
     memory: { total: number; used: number; available: number; swapTotal: number; swapUsed: number }
     load: { one: number; five: number; fifteen: number }
     processes: number
+  }
+
+  type SystemSpecs = {
+    vendor: string; model: string; version: string; family: string; sku: string
+    board: { vendor: string; name: string; version: string }
+    bios: { vendor: string; version: string; date: string }
+    chassis: string
+    cpu: {
+      model: string; vendor: string; architecture: string
+      sockets: number; coresPerSocket: number; threadsPerCore: number
+      totalCores: number; totalThreads: number
+      maxMhz: number | null; minMhz: number | null
+      virtualization: string
+      caches: { l1d: string; l1i: string; l2: string; l3: string }
+    }
+    gpus: { description: string; driver: string }[]
+  }
+
+  type MemoryDetails = {
+    slotsTotal: number; slotsUsed: number
+    dimms: { locator: string; size: string; speed: string; type: string; manufacturer: string; partNumber: string }[]
   }
 
   const HISTORY_MAX = 60   // 5 minutes at 5s interval
@@ -40,6 +62,27 @@
       }
     } catch (e) { error = String(e) }
     finally { loading = false; refreshing = false }
+  }
+
+  // ── Static hardware specs (loaded once, not on the polling interval) ─────
+  let specs      = $state<SystemSpecs | null>(null)
+  let specsError = $state('')
+
+  async function loadSpecs() {
+    try { specs = await invoke<SystemSpecs>('system:specs') }
+    catch (e) { specsError = String(e) }
+  }
+
+  // ── Per-DIMM memory details (privileged, fetched on demand) ──────────────
+  let memDetails    = $state<MemoryDetails | null>(null)
+  let memLoading    = $state(false)
+  let memError      = $state('')
+
+  async function loadMemoryDetails() {
+    memLoading = true; memError = ''
+    try { memDetails = await invoke<MemoryDetails>('system:memoryDetails') }
+    catch (e) { memError = String(e) }
+    finally { memLoading = false }
   }
 
   // Build SVG polyline points from a data series (0-100)
@@ -90,7 +133,17 @@
     return parts.join(' ')
   }
 
-  onMount(() => { load(); interval = setInterval(() => load(true), 5000) })
+  function fmtGhz(mhz: number | null): string {
+    if (!mhz) return '—'
+    return (mhz / 1000).toFixed(2) + ' GHz'
+  }
+
+  // Strip the "(N instances)" suffix lscpu appends to cache sizes
+  function fmtCache(s: string): string {
+    return s ? s.replace(/\s*\(.*\)$/, '') : '—'
+  }
+
+  onMount(() => { load(); loadSpecs(); interval = setInterval(() => load(true), 5000) })
   onDestroy(() => clearInterval(interval))
 
   // ── AI Diagnostics ──────────────────────────────────────────────────────
@@ -153,6 +206,47 @@
         Refresh
       </button>
     </div>
+
+    <!-- Machine identity -->
+    {#if specs}
+      <div class="rounded-xl border border-border bg-card p-4">
+        <div class="flex items-start gap-3">
+          <div class="w-8 h-8 rounded-lg bg-secondary text-muted-foreground flex items-center justify-center shrink-0">
+            <CircuitBoard size={15} />
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium leading-tight">
+              {specs.vendor} {specs.model}{specs.version && specs.version !== specs.model ? ` (${specs.version})` : ''}
+            </p>
+            <p class="text-xs text-muted-foreground leading-tight mt-0.5">{specs.chassis}</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-3 pt-3 border-t border-border/60 text-xs">
+          <div class="flex justify-between gap-2">
+            <span class="text-muted-foreground">Motherboard</span>
+            <span class="font-medium text-right truncate">{specs.board.vendor} {specs.board.name}</span>
+          </div>
+          <div class="flex justify-between gap-2">
+            <span class="text-muted-foreground">BIOS</span>
+            <span class="font-medium text-right truncate">{specs.bios.vendor} {specs.bios.version}</span>
+          </div>
+          {#if specs.family}
+            <div class="flex justify-between gap-2">
+              <span class="text-muted-foreground">Family</span>
+              <span class="font-medium text-right truncate">{specs.family}</span>
+            </div>
+          {/if}
+          {#if specs.bios.date}
+            <div class="flex justify-between gap-2">
+              <span class="text-muted-foreground">BIOS date</span>
+              <span class="font-medium text-right truncate">{specs.bios.date}</span>
+            </div>
+          {/if}
+        </div>
+      </div>
+    {:else if specsError}
+      <Alert message={specsError} />
+    {/if}
 
     <!-- AI Diagnostics -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -249,11 +343,38 @@
           </div>
           <div>
             <p class="text-sm font-medium truncate max-w-xs">{status.cpu.model}</p>
-            <p class="text-xs text-muted-foreground">{status.cpu.cores} logical cores</p>
+            <p class="text-xs text-muted-foreground">
+              {#if specs}
+                {specs.cpu.vendor ? specs.cpu.vendor + ' · ' : ''}{specs.cpu.sockets > 1 ? `${specs.cpu.sockets} sockets · ` : ''}{specs.cpu.coresPerSocket || status.cpu.cores} cores · {specs.cpu.totalThreads || status.cpu.cores} threads
+              {:else}
+                {status.cpu.cores} logical cores
+              {/if}
+            </p>
           </div>
         </div>
         <span class="text-2xl font-semibold tabular-nums">{status.cpu.usage}%</span>
       </div>
+
+      {#if specs}
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Base / Max</p>
+            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtGhz(specs.cpu.minMhz)} – {fmtGhz(specs.cpu.maxMhz)}</p>
+          </div>
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">L2 / L3 Cache</p>
+            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l2)} / {fmtCache(specs.cpu.caches.l3)}</p>
+          </div>
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">L1 Cache</p>
+            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l1d)} d / {fmtCache(specs.cpu.caches.l1i)} i</p>
+          </div>
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Virtualization</p>
+            <p class="text-xs font-medium mt-0.5">{specs.cpu.virtualization || 'Not detected'}</p>
+          </div>
+        </div>
+      {/if}
 
       <!-- Sparkline -->
       {#if cpuHistory.length >= 2}
@@ -315,6 +436,28 @@
       {/if}
     </div>
 
+    <!-- Graphics -->
+    {#if specs && specs.gpus.length > 0}
+      <div class="rounded-xl border border-border bg-card p-4 space-y-2.5">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-primary/10 text-primary">
+            <MonitorPlay size={16} />
+          </div>
+          <p class="text-sm font-medium">Graphics</p>
+        </div>
+        <div class="space-y-1.5">
+          {#each specs.gpus as gpu}
+            <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
+              <span class="text-xs font-medium truncate">{gpu.description}</span>
+              {#if gpu.driver}
+                <span class="text-[10px] font-mono text-muted-foreground shrink-0">{gpu.driver}</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <!-- Memory -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">
       <div class="flex items-center justify-between">
@@ -360,6 +503,59 @@
       <div class="flex justify-between text-xs text-muted-foreground">
         <span>{fmt(status.memory.used)} used</span>
         <span>{fmt(status.memory.available)} available</span>
+      </div>
+
+      <!-- Per-DIMM details (privileged, on demand) -->
+      <div class="border-t border-border pt-3">
+        {#if !memDetails}
+          <button
+            onclick={loadMemoryDetails}
+            disabled={memLoading}
+            class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            {#if memLoading}
+              <RefreshCw size={12} class="animate-spin" />
+              Reading memory modules…
+            {:else}
+              <Eye size={12} />
+              Show memory module details
+            {/if}
+          </button>
+          {#if memError}
+            <p class="text-[11px] text-destructive mt-1.5">{memError}</p>
+          {/if}
+        {:else}
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide">
+              Memory modules ({memDetails.slotsUsed}{memDetails.slotsTotal ? ` of ${memDetails.slotsTotal}` : ''} slots)
+            </p>
+            <button
+              onclick={() => memDetails = null}
+              class="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown size={11} />
+              Hide
+            </button>
+          </div>
+          {#if memDetails.dimms.length > 0}
+            <div class="space-y-1.5">
+              {#each memDetails.dimms as dimm}
+                <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="text-xs font-medium truncate">{dimm.locator}</p>
+                    <p class="text-[10px] text-muted-foreground truncate">{dimm.manufacturer || 'Unknown'}{dimm.partNumber ? ` · ${dimm.partNumber}` : ''}</p>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <p class="text-xs font-medium tabular-nums">{dimm.size}</p>
+                    <p class="text-[10px] text-muted-foreground">{dimm.type}{dimm.speed ? ` · ${dimm.speed}` : ''}</p>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-[11px] text-muted-foreground">No memory module details available</p>
+          {/if}
+        {/if}
       </div>
     </div>
 
