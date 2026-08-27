@@ -1941,9 +1941,26 @@ export async function registerIpcHandlers(): Promise<void> {
       }
       return result
     }
+    // GPU idle time (Intel RC6 residency) is sampled across the same 500ms
+    // window as CPU usage below, so this adds no extra latency.
+    async function findIntelCardDir(): Promise<string | null> {
+      const cards = await readdir('/sys/class/drm').catch(() => [] as string[])
+      for (const c of cards) {
+        if (/^card\d+$/.test(c) && existsSync(`/sys/class/drm/${c}/gt_cur_freq_mhz`)) return `/sys/class/drm/${c}`
+      }
+      return null
+    }
+    const intelCardDir = await findIntelCardDir()
+    const intelRc6Path = intelCardDir
+      ? (existsSync(`${intelCardDir}/gt/gt0/rc6_residency_ms`) ? `${intelCardDir}/gt/gt0/rc6_residency_ms` : `${intelCardDir}/power/rc6_residency_ms`)
+      : null
+    const readRc6 = async () => intelRc6Path ? parseInt(await sysread(intelRc6Path).catch(() => '')) || null : null
+
     const allT1 = await getCpuAllTimes()
+    const rc6T1 = await readRc6()
     await new Promise<void>(r => setTimeout(r, 500))
     const allT2 = await getCpuAllTimes()
+    const rc6T2 = await readRc6()
 
     const cpuDelta = (name: string) => {
       const a = allT1.find(t => t.name === name)
@@ -1954,6 +1971,41 @@ export async function registerIpcHandlers(): Promise<void> {
     }
     const cpuUsage = cpuDelta('cpu')
     const coreUsages = allT1.filter(t => t.name !== 'cpu').map(t => cpuDelta(t.name))
+
+    // GPU utilization: nvidia-smi (dGPU) > amdgpu sysfs > Intel RC6 residency delta
+    type GpuStatus = { vendor: string; busyPct: number | null; curMhz: number | null; maxMhz: number | null; memUsed: number | null; memTotal: number | null }
+    let gpu: GpuStatus | null = null
+    const nvidiaSmi = await run('nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,clocks.current.graphics,clocks.max.graphics --format=csv,noheader,nounits').catch(() => '')
+    if (nvidiaSmi.trim()) {
+      const [util, memUsedMb, memTotalMb, curClk, maxClk] = nvidiaSmi.split('\n')[0].split(',').map(s => parseFloat(s.trim()))
+      gpu = {
+        vendor: 'nvidia',
+        busyPct: Number.isFinite(util) ? Math.round(util) : null,
+        curMhz: Number.isFinite(curClk) ? curClk : null,
+        maxMhz: Number.isFinite(maxClk) ? maxClk : null,
+        memUsed: Number.isFinite(memUsedMb) ? memUsedMb * 1024 * 1024 : null,
+        memTotal: Number.isFinite(memTotalMb) ? memTotalMb * 1024 * 1024 : null
+      }
+    } else {
+      const drmCards = await readdir('/sys/class/drm').catch(() => [] as string[])
+      const amdPath = drmCards.map(c => `/sys/class/drm/${c}/device/gpu_busy_percent`).find(p => existsSync(p)) ?? null
+      if (amdPath) {
+        const pct = parseInt(await sysread(amdPath).catch(() => ''))
+        gpu = { vendor: 'amd', busyPct: Number.isFinite(pct) ? pct : null, curMhz: null, maxMhz: null, memUsed: null, memTotal: null }
+      } else if (rc6T1 != null && rc6T2 != null) {
+        const busyPct = Math.max(0, Math.min(100, Math.round(100 - ((rc6T2 - rc6T1) / 500) * 100)))
+        const curMhz = intelCardDir ? parseInt(await sysread(`${intelCardDir}/gt_cur_freq_mhz`).catch(() => '')) : NaN
+        const maxMhz = intelCardDir ? parseInt(await sysread(`${intelCardDir}/gt_max_freq_mhz`).catch(() => '')) : NaN
+        gpu = {
+          vendor: 'intel',
+          busyPct,
+          curMhz: Number.isFinite(curMhz) ? curMhz : null,
+          maxMhz: Number.isFinite(maxMhz) ? maxMhz : null,
+          memUsed: null,
+          memTotal: null
+        }
+      }
+    }
 
     // Memory from /proc/meminfo
     const memInfo = await readFile('/proc/meminfo', 'utf8').catch(() => '')
@@ -1981,6 +2033,7 @@ export async function registerIpcHandlers(): Promise<void> {
       arch: arch.trim(),
       uptime: { days: uptimeDays, hours: uptimeHrs, minutes: uptimeMins, totalSeconds: uptimeSecs },
       cpu: { model: cpuModel, cores: cpuCores, usage: Math.max(0, Math.min(100, cpuUsage)), coreUsages },
+      gpu,
       memory: {
         total: memTotal,
         used: Math.max(0, memUsed),
@@ -2107,6 +2160,81 @@ export async function registerIpcHandlers(): Promise<void> {
       })
     }
     return { slotsTotal: arraySlots, slotsUsed: dimms.length, dimms }
+  })
+
+  ipcMain.handle('system:packageHealth', async () => {
+    const [upgradableOut, autoremoveOut, cacheDu, installedCountOut] = await Promise.all([
+      run('apt list --upgradable 2>/dev/null').catch(() => ''),
+      run('apt-get autoremove --dry-run 2>/dev/null').catch(() => ''),
+      // `partial/` is root-only, so du exits non-zero even though it still
+      // prints a valid total for everything else — `|| true` keeps that output.
+      run('du -sb /var/cache/apt/archives 2>/dev/null || true').catch(() => '0'),
+      run("dpkg -l | grep -c '^ii'").catch(() => '0')
+    ])
+    const upgradable = upgradableOut.split('\n').filter(l => l.includes('[upgradable')).length
+
+    const lines = autoremoveOut.split('\n')
+    const removedAt = lines.findIndex(l => l.includes('will be REMOVED'))
+    const autoremovable: string[] = []
+    if (removedAt >= 0) {
+      for (let i = removedAt + 1; i < lines.length && /^\s/.test(lines[i]); i++) {
+        autoremovable.push(...lines[i].trim().split(/\s+/).filter(Boolean))
+      }
+    }
+
+    return {
+      upgradable,
+      autoremovable,
+      cacheBytes: parseInt(cacheDu.split(/\s+/)[0]) || 0,
+      installedCount: parseInt(installedCountOut.trim()) || 0
+    }
+  })
+
+  ipcMain.handle('system:bootTime', async () => {
+    const timeOut = await run('systemd-analyze time 2>/dev/null').catch(() => '')
+    const blameOut = await run('systemd-analyze blame 2>/dev/null').catch(() => '')
+
+    const parseDur = (s: string): number => {
+      const m = s.match(/(?:(\d+)min\s*)?([\d.]+)s/)
+      if (!m) return 0
+      return parseInt(m[1] || '0') * 60 + parseFloat(m[2] || '0')
+    }
+    const component = (label: string): number | null => {
+      const m = timeOut.match(new RegExp(`([\\d.]+(?:min\\s*[\\d.]+)?s)\\s*\\(${label}\\)`))
+      return m ? parseDur(m[1]) : null
+    }
+    const totalMatch = timeOut.match(/=\s*((?:\d+min\s*)?[\d.]+s)/)
+
+    const slowest = blameOut.split('\n').filter(Boolean).slice(0, 8).map(line => {
+      const m = line.trim().match(/^(\S+)\s+(\S+)$/)
+      return m ? { time: m[1], unit: m[2] } : null
+    }).filter((x): x is { time: string; unit: string } => x !== null)
+
+    return {
+      totalSeconds: totalMatch ? parseDur(totalMatch[1]) : null,
+      firmware: component('firmware'),
+      loader: component('loader'),
+      kernel: component('kernel'),
+      userspace: component('userspace'),
+      slowest
+    }
+  })
+
+  const TUNABLE_SYSCTL_KEYS = ['vm.swappiness', 'vm.vfs_cache_pressure'] as const
+
+  ipcMain.handle('system:sysctl', async () => {
+    const values: Record<string, number> = {}
+    for (const key of TUNABLE_SYSCTL_KEYS) {
+      const path = `/proc/sys/${key.replace(/\./g, '/')}`
+      values[key] = parseInt(await sysread(path).catch(() => '0')) || 0
+    }
+    return values
+  })
+
+  ipcMain.handle('system:setSysctl', async (_, key: string, value: number) => {
+    if (!(TUNABLE_SYSCTL_KEYS as readonly string[]).includes(key)) throw new Error('Unsupported sysctl key')
+    if (!Number.isInteger(value) || value < 0 || value > 1000) throw new Error('Value must be 0–1000')
+    return privilegedOp('set-sysctl', key, String(value))
   })
 
   // ── Network ────────────────────────────────────────────────────────────────

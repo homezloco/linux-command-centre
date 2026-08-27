@@ -403,6 +403,22 @@ const ops = {
     process.stdout.write(out)
   },
 
+  'set-sysctl'(key, valueStr) {
+    const allowed = ['vm.swappiness', 'vm.vfs_cache_pressure']
+    if (!allowed.includes(key)) throw new Error('Unsupported sysctl key')
+    const value = parseInt(valueStr, 10)
+    if (!Number.isInteger(value) || value < 0 || value > 1000) throw new Error('Value must be 0-1000')
+    execFileSync('sysctl', ['-w', `${key}=${value}`], { stdio: 'inherit' })
+
+    // Persist across reboots
+    const confPath = '/etc/sysctl.d/99-lcc-tuning.conf'
+    let lines = existsSync(confPath) ? readFileSync(confPath, 'utf8').split('\n').filter(Boolean) : []
+    lines = lines.filter((l) => !l.startsWith(`${key}=`))
+    lines.push(`${key}=${value}`)
+    writeFileSync(confPath, lines.join('\n') + '\n', 'utf8')
+    console.log(`${key} set to ${value} (persisted to ${confPath})`)
+  },
+
   'firewall-rule-add'(action, port, proto) {
     if (!['allow', 'deny', 'reject'].includes(action)) throw new Error('Invalid action')
     if (!/^\d+$/.test(port) || parseInt(port) > 65535) throw new Error('Invalid port')

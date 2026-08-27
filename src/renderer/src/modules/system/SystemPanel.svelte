@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers, Sparkles, Send,
-           CircuitBoard, MonitorPlay, Eye, ChevronDown } from 'lucide-svelte'
+           CircuitBoard, MonitorPlay, Eye, ChevronDown, Package, Timer, SlidersHorizontal, Check } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
@@ -10,9 +10,20 @@
     hostname: string; osName: string; kernel: string; arch: string
     uptime: { days: number; hours: number; minutes: number; totalSeconds: number }
     cpu: { model: string; cores: number; usage: number; coreUsages: number[] }
+    gpu: { vendor: string; busyPct: number | null; curMhz: number | null; maxMhz: number | null; memUsed: number | null; memTotal: number | null } | null
     memory: { total: number; used: number; available: number; swapTotal: number; swapUsed: number }
     load: { one: number; five: number; fifteen: number }
     processes: number
+  }
+
+  type PackageHealth = {
+    upgradable: number; autoremovable: string[]; cacheBytes: number; installedCount: number
+  }
+
+  type BootTime = {
+    totalSeconds: number | null
+    firmware: number | null; loader: number | null; kernel: number | null; userspace: number | null
+    slowest: { time: string; unit: string }[]
   }
 
   type SystemSpecs = {
@@ -85,6 +96,49 @@
     finally { memLoading = false }
   }
 
+  // ── Package health (loaded once) ──────────────────────────────────────────
+  let pkgHealth      = $state<PackageHealth | null>(null)
+  let pkgHealthError = $state('')
+
+  async function loadPackageHealth() {
+    try { pkgHealth = await invoke<PackageHealth>('system:packageHealth') }
+    catch (e) { pkgHealthError = String(e) }
+  }
+
+  // ── Boot time (loaded once) ───────────────────────────────────────────────
+  let bootTime      = $state<BootTime | null>(null)
+  let bootTimeError = $state('')
+
+  async function loadBootTime() {
+    try { bootTime = await invoke<BootTime>('system:bootTime') }
+    catch (e) { bootTimeError = String(e) }
+  }
+
+  // ── Kernel tuning (sysctl) ────────────────────────────────────────────────
+  let sysctl        = $state<Record<string, number> | null>(null)
+  let sysctlDraft    = $state<Record<string, number>>({})
+  let sysctlSaving   = $state<string | null>(null)
+  let sysctlSaved    = $state<string | null>(null)
+  let sysctlError    = $state('')
+
+  async function loadSysctl() {
+    try {
+      sysctl = await invoke<Record<string, number>>('system:sysctl')
+      sysctlDraft = { ...sysctl }
+    } catch (e) { sysctlError = String(e) }
+  }
+
+  async function saveSysctl(key: string) {
+    sysctlSaving = key; sysctlError = ''; sysctlSaved = null
+    try {
+      await invoke('system:setSysctl', key, sysctlDraft[key])
+      await loadSysctl()
+      sysctlSaved = key
+      setTimeout(() => { if (sysctlSaved === key) sysctlSaved = null }, 2000)
+    } catch (e) { sysctlError = String(e) }
+    finally { sysctlSaving = null }
+  }
+
   // Build SVG polyline points from a data series (0-100)
   function sparkPoints(data: number[]): string {
     if (data.length < 2) return ''
@@ -143,7 +197,16 @@
     return s ? s.replace(/\s*\(.*\)$/, '') : '—'
   }
 
-  onMount(() => { load(); loadSpecs(); interval = setInterval(() => load(true), 5000) })
+  function fmtDur(secs: number | null): string {
+    if (secs == null) return '—'
+    if (secs >= 60) return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`
+    return `${secs.toFixed(1)}s`
+  }
+
+  onMount(() => {
+    load(); loadSpecs(); loadPackageHealth(); loadBootTime(); loadSysctl()
+    interval = setInterval(() => load(true), 5000)
+  })
   onDestroy(() => clearInterval(interval))
 
   // ── AI Diagnostics ──────────────────────────────────────────────────────
@@ -439,12 +502,34 @@
     <!-- Graphics -->
     {#if specs && specs.gpus.length > 0}
       <div class="rounded-xl border border-border bg-card p-4 space-y-2.5">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-primary/10 text-primary">
-            <MonitorPlay size={16} />
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg bg-primary/10 text-primary">
+              <MonitorPlay size={16} />
+            </div>
+            <p class="text-sm font-medium">Graphics</p>
           </div>
-          <p class="text-sm font-medium">Graphics</p>
+          {#if status.gpu && status.gpu.busyPct != null}
+            <span class="text-2xl font-semibold tabular-nums">{status.gpu.busyPct}%</span>
+          {/if}
         </div>
+
+        {#if status.gpu && status.gpu.busyPct != null}
+          <div class="h-2 rounded-full bg-secondary overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500 {usageColor(status.gpu.busyPct)}"
+                 style="width: {status.gpu.busyPct}%"></div>
+          </div>
+          <div class="flex justify-between text-[10px] text-muted-foreground">
+            <span>{status.gpu.vendor} GPU</span>
+            {#if status.gpu.curMhz}
+              <span>{status.gpu.curMhz} / {status.gpu.maxMhz} MHz</span>
+            {/if}
+            {#if status.gpu.memUsed != null && status.gpu.memTotal != null}
+              <span>{fmt(status.gpu.memUsed)} / {fmt(status.gpu.memTotal)} VRAM</span>
+            {/if}
+          </div>
+        {/if}
+
         <div class="space-y-1.5">
           {#each specs.gpus as gpu}
             <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
@@ -579,6 +664,127 @@
           <div class="h-full rounded-full transition-all duration-500 {usageColor(swapPct)}"
                style="width: {swapPct}%"></div>
         </div>
+      </div>
+    {/if}
+
+    <!-- Boot time -->
+    {#if bootTime}
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg bg-primary/10 text-primary">
+              <Timer size={16} />
+            </div>
+            <p class="text-sm font-medium">Boot Time</p>
+          </div>
+          <span class="text-2xl font-semibold tabular-nums">{fmtDur(bootTime.totalSeconds)}</span>
+        </div>
+        <div class="grid grid-cols-4 gap-2">
+          {#each [['Firmware', bootTime.firmware], ['Loader', bootTime.loader], ['Kernel', bootTime.kernel], ['Userspace', bootTime.userspace]] as [label, val]}
+            <div class="rounded-md bg-secondary/40 px-2 py-1.5 text-center">
+              <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">{label}</p>
+              <p class="text-xs font-medium tabular-nums mt-0.5">{fmtDur(val as number | null)}</p>
+            </div>
+          {/each}
+        </div>
+        {#if bootTime.slowest.length > 0}
+          <div class="border-t border-border pt-3">
+            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-2">Slowest starting units</p>
+            <div class="space-y-1">
+              {#each bootTime.slowest.slice(0, 5) as unit}
+                <div class="flex items-center justify-between text-xs">
+                  <span class="text-muted-foreground truncate">{unit.unit}</span>
+                  <span class="font-medium tabular-nums shrink-0 ml-2">{unit.time}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {:else if bootTimeError}
+      <Alert message={bootTimeError} />
+    {/if}
+
+    <!-- Package health -->
+    {#if pkgHealth}
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-primary/10 text-primary">
+            <Package size={16} />
+          </div>
+          <p class="text-sm font-medium">Package Health</p>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Installed</p>
+            <p class="text-sm font-medium tabular-nums mt-0.5">{pkgHealth.installedCount}</p>
+          </div>
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Upgradable</p>
+            <p class="text-sm font-medium tabular-nums mt-0.5">{pkgHealth.upgradable}</p>
+          </div>
+          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Cache size</p>
+            <p class="text-sm font-medium tabular-nums mt-0.5">{fmt(pkgHealth.cacheBytes)}</p>
+          </div>
+        </div>
+        {#if pkgHealth.autoremovable.length > 0}
+          <div class="border-t border-border pt-3">
+            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-1.5">
+              {pkgHealth.autoremovable.length} package{pkgHealth.autoremovable.length === 1 ? '' : 's'} no longer needed
+            </p>
+            <p class="text-[11px] text-muted-foreground leading-relaxed">{pkgHealth.autoremovable.join(', ')}</p>
+          </div>
+        {/if}
+      </div>
+    {:else if pkgHealthError}
+      <Alert message={pkgHealthError} />
+    {/if}
+
+    <!-- Kernel tuning -->
+    {#if sysctl}
+      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-primary/10 text-primary">
+            <SlidersHorizontal size={16} />
+          </div>
+          <p class="text-sm font-medium">Kernel Tuning</p>
+        </div>
+        <div class="space-y-2.5">
+          {#each [
+            { key: 'vm.swappiness', label: 'Swappiness', hint: 'Lower favors RAM over swap (0–200)' },
+            { key: 'vm.vfs_cache_pressure', label: 'VFS cache pressure', hint: 'Lower retains filesystem cache longer (0–1000)' }
+          ] as tunable}
+            <div class="flex items-center gap-3">
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-medium">{tunable.label}</p>
+                <p class="text-[10px] text-muted-foreground">{tunable.hint}</p>
+              </div>
+              <input
+                type="number"
+                min="0"
+                bind:value={sysctlDraft[tunable.key]}
+                class="w-16 px-2 py-1 rounded-md border border-border bg-secondary/50 text-xs font-mono text-right focus:outline-none"
+              />
+              <button
+                onclick={() => saveSysctl(tunable.key)}
+                disabled={sysctlSaving === tunable.key || sysctlDraft[tunable.key] === sysctl?.[tunable.key]}
+                class="shrink-0 px-2.5 py-1 rounded-md bg-secondary text-xs font-medium hover:bg-secondary/80 disabled:opacity-50 transition-colors flex items-center gap-1"
+              >
+                {#if sysctlSaving === tunable.key}
+                  <RefreshCw size={11} class="animate-spin" />
+                {:else if sysctlSaved === tunable.key}
+                  <Check size={11} class="text-green-400" />
+                {:else}
+                  Apply
+                {/if}
+              </button>
+            </div>
+          {/each}
+        </div>
+        {#if sysctlError}
+          <Alert message={sysctlError} />
+        {/if}
       </div>
     {/if}
 
