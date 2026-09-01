@@ -6,7 +6,7 @@
            Lock, Clock, MousePointer, Paintbrush, Users, Wrench,
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
-           Dna, FolderOpen, Gauge, Layers, Timer, Laptop } from 'lucide-svelte'
+           Dna, FolderOpen, Gauge, Layers, Timer, Laptop, Sparkles } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -51,6 +51,8 @@
   import CommandPalette   from '$lib/CommandPalette.svelte'
   import Toaster          from '$lib/Toaster.svelte'
   import { invoke }      from '$lib/utils'
+  import { theme, THEMES } from '$stores/theme'
+  import { toasts }        from '$stores/toasts'
 
   type Mod = { id: string; label: string; icon: typeof Battery; component: typeof BatteryPanel }
   type Group = { label: string; items: Mod[] }
@@ -156,6 +158,13 @@
     return id === 'vpn' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
   }
 
+  function cycleTheme() {
+    const idx = THEMES.findIndex((t) => t.id === $theme)
+    const next = THEMES[(idx + 1) % THEMES.length]
+    $theme = next.id
+    toasts.info(next.tagline, `Theme: ${next.label}`)
+  }
+
   onMount(async () => {
     try {
       const info = await invoke<{ version: string; osName: string }>('app:info')
@@ -236,6 +245,13 @@
         </div>
         <span class="text-sm font-semibold text-foreground truncate">{current.label}</span>
       </div>
+      <button
+        onclick={cycleTheme}
+        title="Cycle Command Centre theme (currently {THEMES.find((t) => t.id === $theme)?.label})"
+        class="no-drag shrink-0 p-1.5 rounded-md text-muted-foreground/50 hover:text-primary hover:bg-secondary/50 transition-colors"
+      >
+        <Sparkles size={13} />
+      </button>
       <kbd class="no-drag text-[10px] text-muted-foreground/30 border border-border/40 rounded px-1.5 py-0.5 font-mono shrink-0">⌃K</kbd>
     </div>
     <div class="p-5">

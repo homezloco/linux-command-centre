@@ -154,6 +154,10 @@
 @layer base {
   * { @apply border-border; }
 
+  html {
+    background: hsl(var(--background));
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
@@ -161,7 +165,12 @@
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    transition: background-color 200ms ease, color 200ms ease;
+    transition: background-color 200ms ease, background-image 200ms ease, color 200ms ease;
+  }
+
+  /* Cross-fade the structural chrome when a style pack is switched */
+  aside, main, .bg-card, .bg-secondary, .bg-primary, .border-border {
+    transition: background-color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
   }
 
   /* Slim, themed scrollbar */
