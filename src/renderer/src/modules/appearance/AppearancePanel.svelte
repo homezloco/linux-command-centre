@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, Palette, Sun, Moon, Monitor, Type, MousePointer2, ImageIcon } from 'lucide-svelte'
+  import { RefreshCw, Palette, Sun, Moon, Monitor, Type, MousePointer2, ImageIcon, Sparkles } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
+  import { theme, THEMES } from '$stores/theme'
 
   type AppearanceStatus = {
     colorScheme: string; gtkTheme: string; iconTheme: string
@@ -85,6 +86,39 @@
 
 {:else if status}
   <div class="space-y-4 max-w-xl">
+
+    <!-- Command Centre style pack -->
+    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+      <p class="text-sm font-medium flex items-center gap-2">
+        <Sparkles size={14} class="text-muted-foreground" /> Command Centre Theme
+      </p>
+      <p class="text-xs text-muted-foreground -mt-1.5">
+        Cosmetic style for this app only — independent of your desktop theme below. Applies instantly.
+      </p>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {#each THEMES as t}
+          <button
+            onclick={() => $theme = t.id}
+            class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-colors
+                   {$theme === t.id
+                     ? 'border-primary/40 bg-primary/10'
+                     : 'border-border hover:bg-secondary/50'}"
+          >
+            <span class="flex -space-x-1.5 shrink-0">
+              {#each t.swatch as c}
+                <span class="w-3.5 h-3.5 rounded-full border border-black/30" style="background:{c}"></span>
+              {/each}
+            </span>
+            <span class="min-w-0">
+              <span class="block text-xs font-medium truncate {$theme === t.id ? 'text-primary' : 'text-foreground'}">
+                {t.label}
+              </span>
+              <span class="block text-[10px] text-muted-foreground truncate">{t.tagline}</span>
+            </span>
+          </button>
+        {/each}
+      </div>
+    </div>
 
     <!-- Color scheme -->
     <div class="rounded-xl border border-border bg-card p-4 space-y-3">

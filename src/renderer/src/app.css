@@ -26,6 +26,128 @@
     --status-fail: 0 82% 62%;
     /* Sidebar is fractionally darker than card for depth */
     --sidebar-bg: 224 16% 5.5%;
+    /* Theme accent used for glow effects; font-sans overridable per pack */
+    --glow: 213 93% 63%;
+    --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    --bg-image: none;
+  }
+
+  /* ── Cyberdeck — high-tech neon HUD ─────────────────────────────────────── */
+  :root[data-theme='cyberdeck'] {
+    --background: 200 60% 3%;
+    --foreground: 190 40% 92%;
+    --card: 200 50% 6%;
+    --card-foreground: 190 40% 92%;
+    --border: 195 45% 16%;
+    --input: 195 45% 16%;
+    --primary: 187 92% 55%;
+    --primary-foreground: 200 60% 4%;
+    --secondary: 200 40% 11%;
+    --secondary-foreground: 190 40% 92%;
+    --muted: 200 40% 11%;
+    --muted-foreground: 195 20% 60%;
+    --accent: 200 40% 11%;
+    --accent-foreground: 190 40% 92%;
+    --destructive: 350 90% 60%;
+    --ring: 187 92% 55%;
+    --status-ok: 152 80% 50%;
+    --status-warn: 45 95% 55%;
+    --status-fail: 350 90% 60%;
+    --sidebar-bg: 200 65% 2.5%;
+    --glow: 187 92% 55%;
+    --bg-image:
+      radial-gradient(ellipse at top left, hsl(187 92% 55% / 0.07), transparent 45%),
+      radial-gradient(ellipse at bottom right, hsl(320 85% 55% / 0.05), transparent 50%),
+      repeating-linear-gradient(0deg, hsl(187 92% 55% / 0.025) 0px, hsl(187 92% 55% / 0.025) 1px, transparent 1px, transparent 32px),
+      repeating-linear-gradient(90deg, hsl(187 92% 55% / 0.025) 0px, hsl(187 92% 55% / 0.025) 1px, transparent 1px, transparent 32px);
+  }
+
+  /* ── Xenomorph — alien bio-mechanical terminal ──────────────────────────── */
+  :root[data-theme='xenomorph'] {
+    --background: 100 10% 3%;
+    --foreground: 90 15% 88%;
+    --card: 100 12% 6%;
+    --card-foreground: 90 15% 88%;
+    --border: 95 15% 14%;
+    --input: 95 15% 14%;
+    --primary: 84 70% 45%;
+    --primary-foreground: 100 15% 6%;
+    --secondary: 95 12% 10%;
+    --secondary-foreground: 90 15% 88%;
+    --muted: 95 12% 10%;
+    --muted-foreground: 90 10% 55%;
+    --accent: 95 12% 10%;
+    --accent-foreground: 90 15% 88%;
+    --destructive: 5 75% 50%;
+    --ring: 84 70% 45%;
+    --status-ok: 84 70% 45%;
+    --status-warn: 45 85% 50%;
+    --status-fail: 5 75% 50%;
+    --sidebar-bg: 100 12% 2.5%;
+    --glow: 84 70% 45%;
+    --bg-image:
+      radial-gradient(ellipse 60% 45% at 15% 10%, hsl(84 70% 40% / 0.08), transparent 60%),
+      radial-gradient(ellipse 50% 40% at 85% 90%, hsl(84 60% 35% / 0.07), transparent 60%),
+      radial-gradient(ellipse 40% 60% at 90% 20%, hsl(70 50% 30% / 0.05), transparent 65%);
+  }
+
+  /* ── Synthwave — retro-future neon grid ─────────────────────────────────── */
+  :root[data-theme='synthwave'] {
+    --background: 265 45% 5%;
+    --foreground: 300 30% 94%;
+    --card: 265 40% 8%;
+    --card-foreground: 300 30% 94%;
+    --border: 270 35% 18%;
+    --input: 270 35% 18%;
+    --primary: 320 90% 62%;
+    --primary-foreground: 265 45% 6%;
+    --secondary: 265 30% 13%;
+    --secondary-foreground: 300 30% 94%;
+    --muted: 265 30% 13%;
+    --muted-foreground: 280 20% 62%;
+    --accent: 265 30% 13%;
+    --accent-foreground: 300 30% 94%;
+    --destructive: 0 85% 60%;
+    --ring: 320 90% 62%;
+    --status-ok: 160 80% 50%;
+    --status-warn: 40 95% 55%;
+    --status-fail: 0 85% 60%;
+    --sidebar-bg: 265 48% 4%;
+    --glow: 190 95% 60%;
+    --bg-image:
+      radial-gradient(ellipse at top, hsl(320 90% 62% / 0.10), transparent 50%),
+      radial-gradient(ellipse at bottom, hsl(190 95% 60% / 0.08), transparent 55%),
+      repeating-linear-gradient(0deg, hsl(320 90% 62% / 0.02) 0px, hsl(320 90% 62% / 0.02) 1px, transparent 1px, transparent 28px),
+      repeating-linear-gradient(90deg, hsl(190 95% 60% / 0.02) 0px, hsl(190 95% 60% / 0.02) 1px, transparent 1px, transparent 28px);
+  }
+
+  /* ── Matrix — green CRT terminal ────────────────────────────────────────── */
+  :root[data-theme='matrix'] {
+    --background: 120 15% 3%;
+    --foreground: 120 60% 78%;
+    --card: 120 15% 5%;
+    --card-foreground: 120 60% 78%;
+    --border: 120 25% 14%;
+    --input: 120 25% 14%;
+    --primary: 120 90% 45%;
+    --primary-foreground: 120 15% 4%;
+    --secondary: 120 20% 9%;
+    --secondary-foreground: 120 60% 78%;
+    --muted: 120 20% 9%;
+    --muted-foreground: 120 30% 50%;
+    --accent: 120 20% 9%;
+    --accent-foreground: 120 60% 78%;
+    --destructive: 0 80% 55%;
+    --ring: 120 90% 45%;
+    --status-ok: 120 90% 45%;
+    --status-warn: 60 90% 50%;
+    --status-fail: 0 80% 55%;
+    --sidebar-bg: 120 18% 2.5%;
+    --glow: 120 90% 45%;
+    --font-sans: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+    --bg-image:
+      repeating-linear-gradient(0deg, hsl(120 90% 45% / 0.035) 0px, hsl(120 90% 45% / 0.035) 1px, transparent 1px, transparent 3px),
+      radial-gradient(ellipse at center, transparent 55%, hsl(120 15% 0% / 0.5) 100%);
   }
 }
 
@@ -34,9 +156,12 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
+    background-image: var(--bg-image);
+    background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 200ms ease, color 200ms ease;
   }
 
   /* Slim, themed scrollbar */
@@ -99,3 +224,26 @@ button:not(:disabled):active {
 .dot-ok   { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-ok))]; }
 .dot-warn { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-warn))]; }
 .dot-fail { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-fail))]; }
+
+/* ── Style-pack glow accents ──────────────────────────────────────────────── */
+:root[data-theme='cyberdeck'] .bg-card,
+:root[data-theme='xenomorph'] .bg-card,
+:root[data-theme='synthwave'] .bg-card,
+:root[data-theme='matrix'] .bg-card {
+  box-shadow: 0 0 14px -8px hsl(var(--glow) / 0.55);
+}
+
+:root[data-theme='cyberdeck'] .bg-primary,
+:root[data-theme='xenomorph'] .bg-primary,
+:root[data-theme='synthwave'] .bg-primary,
+:root[data-theme='matrix'] .bg-primary {
+  box-shadow: 0 0 12px hsl(var(--glow) / 0.55);
+}
+
+:root[data-theme='cyberdeck'] :focus-visible,
+:root[data-theme='xenomorph'] :focus-visible,
+:root[data-theme='synthwave'] :focus-visible,
+:root[data-theme='matrix'] :focus-visible {
+  outline-color: hsl(var(--glow) / 0.7);
+  box-shadow: 0 0 10px hsl(var(--glow) / 0.4);
+}
