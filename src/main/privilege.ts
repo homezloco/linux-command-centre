@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile)
 /** Path to the privileged helper binary */
 function helperPath(): string {
   if (app.isPackaged) {
-    return join(process.resourcesPath, 'lcc-helper.js')
+    return join(process.resourcesPath, 'helper', 'lcc-helper.js')
   }
   return join(__dirname, '../../helper/lcc-helper.js')
 }
