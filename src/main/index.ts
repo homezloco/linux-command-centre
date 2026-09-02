@@ -5,6 +5,12 @@ import './env'
 import { registerIpcHandlers } from './ipc'
 import { startStreamServer } from './stream-server'
 
+function iconPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(__dirname, '../../build/icon.png')
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1100,
@@ -20,6 +26,7 @@ function createWindow(): BrowserWindow {
       symbolColor: '#a1a1aa',
       height: 40
     },
+    icon: iconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
