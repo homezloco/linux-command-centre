@@ -184,9 +184,18 @@ const ops = {
       const key = pairs[i]
       const value = pairs[i + 1]
       if (!allowed.has(key)) throw new Error(`Disallowed GRUB key: ${key}`)
-      // Values that must be quoted
-      const quoted = ['GRUB_CMDLINE_LINUX_DEFAULT', 'GRUB_TIMEOUT_STYLE'].includes(key)
-      const formatted = quoted ? `"${value}"` : value
+      if (typeof value !== 'string' || value.length > 512) throw new Error(`Invalid value for ${key}`)
+      // This file is sourced as a shell script by update-grub/grub-mkconfig. Every value
+      // below is written back double-quoted, so reject the characters that stay meaningful
+      // even inside double quotes (backtick/$ for substitution, " to break out, \ to
+      // escape, newlines to smuggle in an extra line) — this is the actual trust boundary,
+      // the renderer-side check is only a friendlier first error message.
+      if (/[`$"\\\r\n]/.test(value)) throw new Error(`Invalid characters in ${key}`)
+      if (key === 'GRUB_TIMEOUT' && !/^-?\d+$/.test(value)) throw new Error('GRUB_TIMEOUT must be an integer')
+      if (key === 'GRUB_TIMEOUT_STYLE' && !['menu', 'hidden', 'countdown'].includes(value)) {
+        throw new Error('Invalid GRUB_TIMEOUT_STYLE')
+      }
+      const formatted = `"${value}"`
       if (new RegExp(`^\\s*${key}=`, 'm').test(content)) {
         content = content.replace(new RegExp(`^(\\s*${key})=.*`, 'm'), `$1=${formatted}`)
       } else {
@@ -462,10 +471,10 @@ const ops = {
     console.log(`Locale set to ${locale}`)
   },
 
-  'hosts-write'(tmpPath) {
-    if (!tmpPath || !/^\/tmp\/lcc-hosts-\d+$/.test(tmpPath)) throw new Error('Invalid temp path')
-    if (!existsSync(tmpPath)) throw new Error('Temp file not found')
-    const content = readFileSync(tmpPath, 'utf8')
+  'hosts-write'() {
+    // Content arrives over stdin rather than a shared /tmp file — nothing on disk for a
+    // local process to swap for a symlink between our write and this read.
+    const content = readFileSync(0, 'utf8')
     if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in content')
     if (!content.includes('127.0.0.1') && !content.includes('localhost')) {
       throw new Error('Content must contain localhost entry')
@@ -486,10 +495,10 @@ const ops = {
     process.stdout.write(output)
   },
 
-  'resolv-write'(tmpPath) {
-    if (!tmpPath || !/^\/tmp\/lcc-resolv-\d+$/.test(tmpPath)) throw new Error('Invalid temp path')
-    if (!existsSync(tmpPath)) throw new Error('Temp file not found')
-    const content = readFileSync(tmpPath, 'utf8')
+  'resolv-write'() {
+    // Content arrives over stdin rather than a shared /tmp file — nothing on disk for a
+    // local process to swap for a symlink between our write and this read.
+    const content = readFileSync(0, 'utf8')
     if (/[^\x09\x0a\x0d\x20-\x7e]/.test(content)) throw new Error('Invalid characters in resolv content')
     // Must contain at least one nameserver
     if (!content.includes('nameserver')) throw new Error('Content must contain at least one nameserver')

@@ -33,6 +33,38 @@ export async function privilegedOp(operation: string, ...args: string[]): Promis
   }
 }
 
+/**
+ * Run a privileged operation via pkexec + lcc-helper, feeding `stdin` to the helper's
+ * standard input instead of a shared file path. Used for operations that write untrusted
+ * content (e.g. /etc/hosts, /etc/resolv.conf) so there's no predictable on-disk file for a
+ * local process to race between our write and the root helper's read.
+ */
+export function privilegedOpWithStdin(operation: string, args: string[], stdin: string): Promise<string> {
+  const helper = helperPath()
+  return new Promise((resolve, reject) => {
+    const child = spawn('pkexec', ['node', helper, operation, ...args])
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+    child.on('error', (err) => reject(new Error(err.message)))
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(stdout.trim())
+      } else if (code === 126 || code === 127) {
+        reject(new Error('Authentication cancelled or pkexec not available'))
+      } else {
+        const detail = stderr.trim().replace(/^Error:\s*/i, '')
+        reject(new Error(detail || `Operation exited with status ${code ?? 'unknown'}`))
+      }
+    })
+
+    child.stdin.write(stdin)
+    child.stdin.end()
+  })
+}
+
 export function privilegedOpStreaming(
   operation: string,
   args: string[],
