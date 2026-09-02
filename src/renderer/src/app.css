@@ -173,11 +173,18 @@
     transition: background-color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
   }
 
+  /* Respect reduced-motion: theme switches happen instantly, no cross-fade */
+  @media (prefers-reduced-motion: reduce) {
+    body, aside, main, .bg-card, .bg-secondary, .bg-primary, .border-border {
+      transition: none;
+    }
+  }
+
   /* Slim, themed scrollbar */
   ::-webkit-scrollbar           { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track     { background: transparent; }
   ::-webkit-scrollbar-thumb     { background: hsl(var(--border)); border-radius: 99px; }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(220 9% 32%); }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
   ::-webkit-scrollbar-corner    { background: transparent; }
 
   /* Selection colour matches primary */
