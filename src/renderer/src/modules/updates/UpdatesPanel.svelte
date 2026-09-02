@@ -86,7 +86,7 @@
     upgrading = false
     upgradeProgress = message
     if (success) {
-      toasts.success('System upgrade completed successfully', 'Updates')
+      toasts.success(message, 'Updates')
     } else {
       toasts.error(message || 'Upgrade failed', 'Updates')
     }
@@ -94,11 +94,20 @@
 
   async function upgradeAll() {
     if (!status || status.packages.length === 0) return
+    const before = status.packages.length
     resetUpgradeState('Upgrading all packages…')
     try {
       await invoke('updates:upgrade')
       await load()
-      finishUpgrade(true, 'Upgrade complete!')
+      const remaining = status?.packages.length ?? 0
+      if (remaining === 0) {
+        finishUpgrade(true, 'Upgrade complete!')
+      } else {
+        finishUpgrade(
+          true,
+          `Upgraded ${before - remaining} of ${before} — ${remaining} still need attention (see below)`
+        )
+      }
     } catch (e) {
       error = formatError(e)
       finishUpgrade(false, 'Upgrade failed')
@@ -107,11 +116,21 @@
 
   async function upgradeSelected() {
     if (selectedPackages.size === 0) return
-    resetUpgradeState(`Upgrading ${selectedPackages.size} package${selectedPackages.size === 1 ? '' : 's'}…`)
+    const targeted = Array.from(selectedPackages)
+    resetUpgradeState(`Upgrading ${targeted.length} package${targeted.length === 1 ? '' : 's'}…`)
     try {
-      await invoke('updates:upgrade', Array.from(selectedPackages))
+      await invoke('updates:upgrade', targeted)
       await load()
-      finishUpgrade(true, 'Upgrade complete!')
+      const remainingNames = new Set(status?.packages.map(p => p.name) ?? [])
+      const stillPending = targeted.filter(n => remainingNames.has(n))
+      if (stillPending.length === 0) {
+        finishUpgrade(true, 'Upgrade complete!')
+      } else {
+        finishUpgrade(
+          true,
+          `Upgraded ${targeted.length - stillPending.length} of ${targeted.length} — ${stillPending.join(', ')} still pending`
+        )
+      }
     } catch (e) {
       error = formatError(e)
       finishUpgrade(false, 'Upgrade failed')
@@ -347,6 +366,7 @@
             {/if}
             <button
               onclick={upgradeAll}
+              title="Full upgrade — also installs updates normally deferred by phased rollout or held back for new dependencies"
               class="px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors"
             >
               Upgrade All

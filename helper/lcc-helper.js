@@ -355,14 +355,29 @@ const ops = {
     if (packages.length === 0) throw new Error('Invalid package names')
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
     await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'install', '--only-upgrade', '-y', ...packages], env)
+    // The user explicitly picked these packages from the "available updates" list, so
+    // honor that choice even if apt would otherwise defer them (phased rollout) or the
+    // resolver would need to pull in new dependencies (a plain --only-upgrade refuses that).
+    await runApt([
+      '-o', 'DPkg::Lock::Timeout=300',
+      '-o', 'APT::Get::Always-Include-Phased-Updates=true',
+      'install', '-y', ...packages
+    ], env)
     console.log(`Upgraded packages: ${packages.join(', ')}`)
   },
 
   async 'apt-upgrade-all'() {
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
     await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'upgrade', '-y'], env)
+    // Plain `apt-get upgrade` silently skips packages deferred by phased rollout and
+    // anything "kept back" because it would need to install/remove other packages.
+    // "Upgrade All" should mean all of what the panel just listed, so use dist-upgrade
+    // and opt in to phased updates explicitly.
+    await runApt([
+      '-o', 'DPkg::Lock::Timeout=300',
+      '-o', 'APT::Get::Always-Include-Phased-Updates=true',
+      'dist-upgrade', '-y'
+    ], env)
     console.log('System upgrade completed')
   },
 
