@@ -53,6 +53,7 @@
   import { invoke }      from '$lib/utils'
   import { theme, THEMES } from '$stores/theme'
   import { toasts }        from '$stores/toasts'
+  import { appName, DEFAULT_APP_NAME } from '$stores/appName'
 
   type Mod = { id: string; label: string; icon: typeof Battery; component: typeof BatteryPanel }
   type Group = { label: string; items: Mod[] }
@@ -185,8 +186,11 @@
   <aside class="w-52 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
     <div class="drag-region flex items-center gap-2.5 px-4 h-11 border-b border-border shrink-0">
       <Shield size={13} class="text-primary/70 no-drag shrink-0" />
-      <span class="text-[11px] font-semibold text-foreground/70 uppercase tracking-widest no-drag leading-none">
-        Command Centre
+      <span
+        title={$appName.trim() || DEFAULT_APP_NAME}
+        class="min-w-0 truncate text-[11px] font-semibold text-foreground/70 uppercase tracking-widest no-drag leading-none"
+      >
+        {$appName.trim() || DEFAULT_APP_NAME}
       </span>
     </div>
 

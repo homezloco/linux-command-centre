@@ -5,6 +5,7 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
   import { theme, THEMES } from '$stores/theme'
+  import { appName, DEFAULT_APP_NAME } from '$stores/appName'
 
   type AppearanceStatus = {
     colorScheme: string; gtkTheme: string; iconTheme: string
@@ -117,6 +118,34 @@
             </span>
           </button>
         {/each}
+      </div>
+    </div>
+
+    <!-- Header name -->
+    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
+      <p class="text-sm font-medium flex items-center gap-2">
+        <Type size={14} class="text-muted-foreground" /> Header Name
+      </p>
+      <p class="text-xs text-muted-foreground -mt-1.5">
+        Label shown at the top of the sidebar, in place of "{DEFAULT_APP_NAME}". Applies instantly.
+      </p>
+      <div class="flex gap-2">
+        <input
+          type="text"
+          bind:value={$appName}
+          maxlength="60"
+          placeholder={DEFAULT_APP_NAME}
+          class="flex-1 min-w-0 rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm
+                 focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        {#if $appName.trim() && $appName.trim() !== DEFAULT_APP_NAME}
+          <button
+            onclick={() => $appName = DEFAULT_APP_NAME}
+            class="shrink-0 px-3 py-1.5 rounded-md text-xs border border-border hover:bg-secondary transition-colors"
+          >
+            Reset
+          </button>
+        {/if}
       </div>
     </div>
 
