@@ -377,16 +377,25 @@ const ops = {
 
   async 'apt-upgrade-all'() {
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    const phased = ['-o', 'APT::Get::Always-Include-Phased-Updates=true']
     await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
     // Plain `apt-get upgrade` silently skips packages deferred by phased rollout and
     // anything "kept back" because it would need to install/remove other packages.
     // "Upgrade All" should mean all of what the panel just listed, so use dist-upgrade
     // and opt in to phased updates explicitly.
-    await runApt([
-      '-o', 'DPkg::Lock::Timeout=300',
-      '-o', 'APT::Get::Always-Include-Phased-Updates=true',
-      'dist-upgrade', '-y'
-    ], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', ...phased, 'dist-upgrade', '-y'], env)
+
+    // dist-upgrade's system-wide resolver still won't remove an already-installed
+    // package to satisfy an upgrade (e.g. a plugin ABI bump) — it leaves it "kept back"
+    // rather than touch anything not explicitly requested. Anything still upgradable at
+    // this point needs to be named directly, the same way an individual package upgrade
+    // already works, since apt is willing to remove conflicting packages for an
+    // explicitly named target.
+    const listing = spawnSync('apt', ['list', '--upgradable'], { encoding: 'utf8' }).stdout || ''
+    const remaining = [...listing.matchAll(/^(\S+)\/\S+\s+\S+\s+\S+\s+\[upgradable from:/gm)].map((m) => m[1])
+    if (remaining.length > 0) {
+      await runApt(['-o', 'DPkg::Lock::Timeout=300', ...phased, 'install', '-y', ...remaining], env)
+    }
     console.log('System upgrade completed')
   },
 
