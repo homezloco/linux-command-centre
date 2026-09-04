@@ -30,7 +30,7 @@ modules:
         - --share=network
     sources:
       - type: file
-        url: https://github.com/yourusername/linux-command-centre/releases/download/v0.1.0/linux-command-centre-0.1.0-linux-amd64.tar.gz
+        url: https://github.com/homezloco/linux-command-centre/releases/download/v0.1.0/linux-command-centre-0.1.0-linux-amd64.tar.gz
         sha256: PLACEHOLDER_REPLACE_WITH_ACTUAL_SHA256
     build-commands:
       - install -Dm755 -t /app/bin/linux-command-centre linux-command-centre

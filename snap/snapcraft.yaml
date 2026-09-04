@@ -17,16 +17,6 @@ architectures:
 apps:
   linux-command-centre:
     command: linux-command-centre
-    extensions: [gnome]
-    plugs:
-      - home
-      - network
-      - network-bind
-      - hardware-observe
-      - system-observe
-      - network-observe
-      - network-manager-observe
-      - polkit
 
 parts:
   linux-command-centre:
@@ -51,3 +41,4 @@ parts:
       npm run package -- --linux snap
       mkdir -p $SNAPCRAFT_PART_INSTALL/
       cp -r release/linux*unpacked/* $SNAPCRAFT_PART_INSTALL/
+      cp helper/io.lcc.helper.policy $SNAPCRAFT_PART_INSTALL/io.lcc.helper.policy

@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+if [ -f "$SNAP/io.lcc.helper.policy" ]; then
+  install -Dm644 "$SNAP/io.lcc.helper.policy" /usr/share/polkit-1/actions/io.lcc.helper.policy
+fi
