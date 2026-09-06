@@ -24,7 +24,7 @@ jobs:
         run: npm run build
 
       - name: Package (Linux)
-        run: npm run package -- --linux deb rpm tar.gz
+        run: npm run package -- --linux deb rpm tar.gz --publish never
 
       - name: Rename artifacts
         run: |
