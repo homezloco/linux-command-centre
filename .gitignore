@@ -10,3 +10,13 @@ release/
 .env
 .env.local
 .env.*.local
+
+# Snapcraft build artifacts
+parts/
+prime/
+stage/
+.craft/
+*.snap
+*.tar.bz2
+
+tsconfig.*.tsbuildinfo

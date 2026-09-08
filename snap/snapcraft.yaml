@@ -7,12 +7,19 @@ description: |
   Manage system info, network (VPN, Wi-Fi, Bluetooth), hardware, storage,
   services, logs, and more from one place.
 
+title: Linux Command Centre
+license: MIT
+contact: https://github.com/homezloco/linux-command-centre/issues
+issues: https://github.com/homezloco/linux-command-centre/issues
+source-code: https://github.com/homezloco/linux-command-centre
+website: https://github.com/homezloco/linux-command-centre
+
 grade: stable
 confinement: classic
 
-architectures:
-  - build-on: amd64
-  - build-on: arm64
+platforms:
+  amd64:
+  arm64:
 
 apps:
   linux-command-centre:
@@ -36,9 +43,11 @@ parts:
       - libxss-dev
       - libasound2-dev
     override-build: |
-      npm install
+      set -e
+      npm ci
       npm run build
-      npm run package -- --linux snap
-      mkdir -p $SNAPCRAFT_PART_INSTALL/
-      cp -r release/linux*unpacked/* $SNAPCRAFT_PART_INSTALL/
-      cp helper/io.lcc.helper.policy $SNAPCRAFT_PART_INSTALL/io.lcc.helper.policy
+      npx electron-builder --linux dir --publish never
+      mkdir -p $CRAFT_PART_INSTALL/
+      cp -r release/linux*unpacked/* $CRAFT_PART_INSTALL/
+      mkdir -p $CRAFT_PART_INSTALL/usr/share/polkit-1/actions
+      cp helper/io.lcc.helper.policy $CRAFT_PART_INSTALL/usr/share/polkit-1/actions/io.lcc.helper.policy

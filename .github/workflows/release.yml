@@ -41,16 +41,45 @@ jobs:
           name: linux-artifacts
           path: release/*
 
+  build-snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build snap
+        uses: canonical/action-build@v1
+        id: snapcraft-build
+
+      - name: Rename snap
+        run: |
+          mkdir -p release
+          cp "${{ steps.snapcraft-build.outputs.snap }}" "release/linux-command-centre_${{ github.ref_name }}_amd64.snap"
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap-artifact
+          path: release/*.snap
+
   release:
-    needs: build-linux
+    needs:
+      - build-linux
+      - build-snap
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download artifacts
+      - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
           name: linux-artifacts
+          path: release/
+
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap-artifact
           path: release/
 
       - name: Create Release

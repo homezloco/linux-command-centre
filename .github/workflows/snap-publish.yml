@@ -1,0 +1,31 @@
+name: Publish Snap
+
+# Manual workflow to upload a previously built snap to the Snap Store.
+# Keep this workflow_dispatch-only until the classic-confinement request at
+# https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163
+# is approved; afterwards it can be switched to trigger on release events.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag of the release to publish (e.g. v0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  publish-snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download snap from GitHub Release
+        run: |
+          mkdir -p release
+          curl -L -o "release/linux-command-centre_${{ inputs.tag }}_amd64.snap" \
+            "https://github.com/homezloco/linux-command-centre/releases/download/${{ inputs.tag }}/linux-command-centre_${{ inputs.tag }}_amd64.snap"
+
+      - name: Publish to Snap Store
+        uses: canonical/action-publish@v1
+        with:
+          snap: "release/linux-command-centre_${{ inputs.tag }}_amd64.snap"
+          release: stable
+          store-login: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
