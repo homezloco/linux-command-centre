@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Linux Command Centre
+Comment=Centralised system management dashboard
+Exec=linux-command-centre
+Icon=linux-command-centre
+Terminal=false
+StartupNotify=true
+Categories=System;Settings;

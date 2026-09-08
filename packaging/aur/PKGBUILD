@@ -1,0 +1,59 @@
+# Maintainer: Homezloco <shanepeterholmes@gmail.com>
+pkgname=linux-command-centre-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Centralised Linux system management dashboard (Electron)"
+arch=('x86_64')
+url="https://github.com/Homezloco/linux-command-centre"
+license=('MIT')
+depends=('gtk3' 'nss' 'libxss' 'libxtst' 'alsa-lib' 'at-spi2-core' 'libdrm' 'mesa' 'polkit' 'xdg-utils' 'nodejs')
+provides=('linux-command-centre')
+conflicts=('linux-command-centre')
+options=('!strip')
+source=(
+  "linux-command-centre-v${pkgver}-linux-x64.tar.gz::https://github.com/Homezloco/linux-command-centre/releases/download/v${pkgver}/linux-command-centre-v${pkgver}-linux-x64.tar.gz"
+  "linux-command-centre.desktop"
+  "io.lcc.helper.policy"
+  "icon.png"
+)
+sha256sums=(
+  '2a3728e42ff002259b7264ece737089ab30e0a9a24f76266da59aba4494819d9'  # tarball - kept in sync by update-checksums.sh
+  '3e7264f6fef3fa23e6fb98499dfaccca26c675caa05820f9ca8cd355372d8cd1'  # linux-command-centre.desktop
+  '9e0719adbdebf77424e7236385fcdd7f1f28cc5365d5e313ce9a4a08d91f42f7'  # io.lcc.helper.policy
+  '9ed7664d1ca17787991f0c8657036acd86646274516b1210f92fdd21915e487a'  # icon.png
+)
+
+package() {
+  install -d "$pkgdir/opt/linux-command-centre"
+
+  # electron-builder's tar.gz target sometimes wraps contents in a single
+  # top-level dir and sometimes doesn't, depending on version - handle both.
+  local extract_tmp
+  extract_tmp="$(mktemp -d)"
+  tar -xf "$srcdir/linux-command-centre-v${pkgver}-linux-x64.tar.gz" -C "$extract_tmp"
+  local entries=("$extract_tmp"/*)
+  if [ "${#entries[@]}" -eq 1 ] && [ -d "${entries[0]}" ]; then
+    cp -a "${entries[0]}/." "$pkgdir/opt/linux-command-centre/"
+  else
+    cp -a "$extract_tmp/." "$pkgdir/opt/linux-command-centre/"
+  fi
+  rm -rf "$extract_tmp"
+
+  # Chromium's sandbox helper needs setuid root to work; the tarball ships
+  # it as plain 0755. pacman/rpm apply archived permission bits as root at
+  # real install time, so setting the bit here (as the build user) is enough.
+  chmod 4755 "$pkgdir/opt/linux-command-centre/chrome-sandbox"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/linux-command-centre/linux-command-centre" \
+        "$pkgdir/usr/bin/linux-command-centre"
+
+  install -Dm644 "$srcdir/linux-command-centre.desktop" \
+    "$pkgdir/usr/share/applications/linux-command-centre.desktop"
+
+  install -Dm644 "$srcdir/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/linux-command-centre.png"
+
+  install -Dm644 "$srcdir/io.lcc.helper.policy" \
+    "$pkgdir/usr/share/polkit-1/actions/io.lcc.helper.policy"
+}

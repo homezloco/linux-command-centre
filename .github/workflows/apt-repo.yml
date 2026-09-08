@@ -1,0 +1,74 @@
+name: Publish APT repo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.1)"
+        required: true
+
+jobs:
+  publish-apt-repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: Determine tag
+        id: tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then TAG="${{ github.event.inputs.tag }}"; fi
+          if [ -z "$TAG" ]; then echo "No tag resolved" >&2; exit 1; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download .deb from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p apt/pool/main
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            -R "${{ github.repository }}" -p '*.deb' \
+            -D apt/pool/main --clobber
+
+      - name: Build repo metadata
+        run: |
+          cd apt
+          mkdir -p dists/stable/main/binary-amd64
+          apt-ftparchive packages pool/main > dists/stable/main/binary-amd64/Packages
+          gzip -9c dists/stable/main/binary-amd64/Packages > dists/stable/main/binary-amd64/Packages.gz
+          cd dists/stable
+          apt-ftparchive release . > Release
+
+      - name: Sign Release (skipped if no key configured)
+        working-directory: apt/dists/stable
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "APT_GPG_PRIVATE_KEY not set — publishing unsigned repo."
+            exit 0
+          fi
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/{print $5; exit}')
+          gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --local-user "$KEYID" -abs -o Release.gpg Release
+          gpg --batch --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+            --local-user "$KEYID" --clearsign -o InRelease Release
+          gpg --batch --armor --export "$KEYID" > ../../pubkey.gpg
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apt
+          git commit -m "Publish APT repo for ${{ steps.tag.outputs.tag }}" || echo "Nothing to commit"
+          git push

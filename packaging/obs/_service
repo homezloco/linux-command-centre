@@ -1,0 +1,6 @@
+<services>
+  <service name="download_url" mode="disabled">
+    <param name="url">https://github.com/Homezloco/linux-command-centre/releases/download/v0.1.0/linux-command-centre-v0.1.0-linux-x64.tar.gz</param>
+    <param name="filename">linux-command-centre-v0.1.0-linux-x64.tar.gz</param>
+  </service>
+</services>
