@@ -171,18 +171,57 @@ npm run build      # Compile TypeScript + bundle renderer
 npm run package    # Build and package as .deb and AppImage
 ```
 
-Packaged artifacts go to `out/`. Distribution targets: `.deb` and `.AppImage` (Linux only).
+Packaged artifacts go to `release/`. Distribution targets: `.deb`, `.rpm`, `.AppImage`, `.tar.gz` (Linux only). A `.snap` is also built via `snapcraft`.
 
 ### Installing the privileged helper
 
-The helper must be installed to `/usr/lib/lcc-helper.js` for privileged operations to work:
+Privileged operations run through `helper/lcc-helper.js` executed as root via `pkexec`.
+
+In **development**, install the helper and polkit policy manually so `pkexec` can find them:
 
 ```bash
 sudo cp helper/lcc-helper.js /usr/lib/lcc-helper.js
 sudo chmod 755 /usr/lib/lcc-helper.js
+sudo cp helper/io.lcc.helper.policy /usr/share/polkit-1/actions/io.lcc.helper.policy
 ```
 
-A polkit policy file is also required (see `resources/` in packaged builds). In development, `pkexec` will prompt for credentials using the installed policy.
+In **packaged builds**, the helper is bundled at `resources/helper/lcc-helper.js`. The snap package installs the polkit policy to `usr/share/polkit-1/actions/io.lcc.helper.policy`.
+
+## Snap packaging
+
+`snap/snapcraft.yaml` builds a **classic-confinement** snap. Classic confinement is required because the app performs system-level operations (editing `/etc/default/grub`, loading kernel modules, managing users, running `apt-get`, managing UFW, etc.) that have no equivalent snapd strict-confinement interfaces.
+
+Build locally:
+
+```bash
+snapcraft --use-lxd
+# or, if LXD is not available and you accept host modifications:
+sudo snapcraft --destructive-mode
+```
+
+The resulting `.snap` is produced in the project root.
+
+### Snap Store publishing status
+
+A request for classic confinement is open on the Snapcraft forum:
+https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163
+
+Do **not** publish to the Snap Store until that request is approved; the automated review will reject a classic-confinement snap without manual approval.
+
+## GitHub releases and publishing
+
+Pushing a tag matching `v*` triggers the `Release` workflow:
+
+1. Builds `.deb`, `.rpm`, `.tar.gz`, and `.snap` artifacts.
+2. Creates a **draft** GitHub Release and attaches all artifacts.
+
+After the draft release is published, the `Publish Snap` workflow can be run manually to upload the `.snap` to the Snap Store. It requires a repository secret named `SNAPCRAFT_STORE_CREDENTIALS`. Generate it with:
+
+```bash
+snapcraft export-login --snaps=linux-command-centre --channels=stable exported.txt
+```
+
+Then paste the contents of `exported.txt` into the GitHub secret.
 
 ## Tech stack
 
