@@ -42,7 +42,7 @@
   },
   "build": {
     "appId": "com.electron.linux-command-centre",
-    "productName": "Linux Command Centre",
+    "productName": "linux-command-centre",
     "copyright": "Copyright 2024",
     "asar": true,
     "asarUnpack": [
@@ -118,6 +118,9 @@
     "rpm": {
       "afterInstall": "helper/after-install.sh",
       "afterRemove": "helper/after-remove.sh"
+    },
+    "deb": {
+      "afterInstall": "packaging/scripts/after-install.sh"
     },
     "mac": {
       "hardenedRuntime": true,
