@@ -1,6 +1,25 @@
 # Linux Command Centre
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Homezloco/linux-command-centre)](https://github.com/Homezloco/linux-command-centre/releases/latest)
+
 A desktop system management dashboard for Ubuntu/Linux, built with Electron + Svelte 5.
+
+## Installation
+
+**Direct download** (available now): grab `.deb`, `.rpm`, or `.tar.gz` from the [latest release](https://github.com/Homezloco/linux-command-centre/releases/latest).
+
+```bash
+# Debian/Ubuntu
+sudo dpkg -i linux-command-centre_*.deb
+
+# Fedora/RHEL
+sudo rpm -i linux-command-centre-*.rpm
+```
+
+**Package repositories** (AUR, Fedora COPR, openSUSE OBS, and a self-hosted APT repo are packaged and ready to publish — see `packaging/README.md` for status and setup). Once live, these will keep the app up to date automatically rather than requiring manual `.deb`/`.rpm` downloads per release.
+
+**From source** — see [Development](#development) below.
 
 ## Modules
 
@@ -203,10 +222,7 @@ The resulting `.snap` is produced in the project root.
 
 ### Snap Store publishing status
 
-A request for classic confinement is open on the Snapcraft forum:
-https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163
-
-Do **not** publish to the Snap Store until that request is approved; the automated review will reject a classic-confinement snap without manual approval.
+**On hold.** The [classic confinement request](https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163) was declined — Canonical's reviewers reserve classic confinement for established projects with a track record, and root-helper-via-`pkexec` is explicitly excluded from classic confinement regardless of project maturity. Revisiting this needs either a strict-confinement rework (replacing the `pkexec` root helper with snapd's `polkit` interface for the operations that support it) or a larger, more established user base before re-requesting — see `packaging/README.md` for the channels being used instead in the meantime.
 
 ## GitHub releases and publishing
 
