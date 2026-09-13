@@ -88,6 +88,8 @@
     autoUpdates: AutoUpdatesStatus | null
     clamav: ClamavStatus | null
     lynis: LynisStatus | null
+    residualPackages: number
+    protocolsBlacklisted: boolean
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -116,11 +118,80 @@
   let scanOutput = $state('')
   let scanResult = $state<ScanResult | null>(null)
 
+  // ── ClamAV scan excludes ────────────────────────────────────────────────────
+  type ExcludeOption = { id: string; label: string; fragments: string[] }
+  const EXCLUDE_OPTIONS: ExcludeOption[] = [
+    { id: 'node_modules', label: 'node_modules', fragments: ['node_modules'] },
+    { id: 'cache', label: '.cache directories', fragments: ['.cache'] },
+    { id: 'git', label: '.git directories', fragments: ['.git'] },
+    { id: 'venv', label: 'Python virtualenvs', fragments: ['venv', '.venv'] }
+  ]
+  const EXCLUDE_STORAGE_KEY = 'lcc-clamav-excludes'
+  const CUSTOM_EXCLUDE_STORAGE_KEY = 'lcc-clamav-custom-excludes'
+  const DEFAULT_EXCLUDES = ['node_modules', 'cache']
+
+  let excludeChecked = $state<Set<string>>(new Set(DEFAULT_EXCLUDES))
+  let customExcludes = $state<string[]>([])
+  let customExcludeInput = $state('')
+
+  function loadExcludePrefs(): void {
+    try {
+      const raw = localStorage.getItem(EXCLUDE_STORAGE_KEY)
+      excludeChecked = new Set(raw ? JSON.parse(raw) : DEFAULT_EXCLUDES)
+    } catch {
+      excludeChecked = new Set(DEFAULT_EXCLUDES)
+    }
+    try {
+      const raw = localStorage.getItem(CUSTOM_EXCLUDE_STORAGE_KEY)
+      customExcludes = raw ? JSON.parse(raw) : []
+    } catch {
+      customExcludes = []
+    }
+  }
+
+  function saveExcludePrefs(): void {
+    try {
+      localStorage.setItem(EXCLUDE_STORAGE_KEY, JSON.stringify([...excludeChecked]))
+      localStorage.setItem(CUSTOM_EXCLUDE_STORAGE_KEY, JSON.stringify(customExcludes))
+    } catch { /* non-critical */ }
+  }
+
+  function toggleExclude(id: string): void {
+    const next = new Set(excludeChecked)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    excludeChecked = next
+    saveExcludePrefs()
+  }
+
+  function addCustomExclude(): void {
+    const v = customExcludeInput.trim()
+    customExcludeInput = ''
+    if (!v || customExcludes.includes(v)) return
+    customExcludes = [...customExcludes, v]
+    saveExcludePrefs()
+  }
+
+  function removeCustomExclude(v: string): void {
+    customExcludes = customExcludes.filter((x) => x !== v)
+    saveExcludePrefs()
+  }
+
+  function computeExcludeFragments(): string[] {
+    const fromOptions = EXCLUDE_OPTIONS.filter((o) => excludeChecked.has(o.id)).flatMap((o) => o.fragments)
+    return [...fromOptions, ...customExcludes]
+  }
+
   let auditing = $state(false)
   let auditOutput = $state('')
   let lynisResult = $state<LynisResult | null>(null)
 
-  let activeStream = $state<'scan' | 'audit' | null>(null)
+  let installOutput = $state('')
+
+  let purging = $state(false)
+  let blacklisting = $state(false)
+
+  let activeStream = $state<'scan' | 'audit' | 'install' | null>(null)
 
   // ── Load ────────────────────────────────────────────────────────────────────
   async function load(force = false) {
@@ -181,13 +252,43 @@
 
   async function installTool(name: 'clamav' | 'lynis' | 'unattended-upgrades') {
     installing = new Set([...installing, name])
+    installOutput = ''
+    activeStream = 'install'
     try {
       await invoke('security:install-tool', name)
-      await load()
     } catch (e) {
       error = String(e)
     } finally {
       installing = new Set([...installing].filter(n => n !== name))
+      activeStream = null
+      // Refresh regardless of outcome: apt-get can succeed even after we report
+      // an error (see the timeout note on security:install-tool), so trust the
+      // system's actual state over our own error branch.
+      await load()
+    }
+  }
+
+  async function purgeResidualPackages() {
+    purging = true
+    try {
+      await invoke('security:purge-residual')
+      await load()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      purging = false
+    }
+  }
+
+  async function blacklistProtocols() {
+    blacklisting = true
+    try {
+      await invoke('security:blacklist-protocols')
+      await load()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      blacklisting = false
     }
   }
 
@@ -197,7 +298,7 @@
     scanResult = null
     activeStream = 'scan'
     try {
-      scanResult = await invoke<ScanResult>('security:clamav-scan')
+      scanResult = await invoke<ScanResult>('security:clamav-scan', computeExcludeFragments())
     } catch (e) {
       error = String(e)
     } finally {
@@ -221,14 +322,63 @@
     }
   }
 
+  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null }
+
+  // A scan/audit is a real child process in the main process, independent of
+  // whatever Svelte component happens to be watching it — switching tabs (or,
+  // during dev, a hot-reload) recreates this component with fresh local state
+  // while the operation keeps running underneath. Polling the main process's
+  // own state on mount recovers "is something already running, and what did
+  // it produce" instead of assuming nothing happened just because this fresh
+  // instance never started anything itself.
+  async function pollUntilDone<T>(channel: string, onUpdate: (state: OpState<T>) => void): Promise<void> {
+    for (;;) {
+      const state = await invoke<OpState<T>>(channel)
+      onUpdate(state)
+      if (!state.running) return
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  }
+
+  function rehydrate(): void {
+    pollUntilDone<ScanResult>('security:clamav-scan-status', (s) => {
+      scanOutput = s.output
+      if (s.running) {
+        scanning = true
+        activeStream = 'scan'
+      } else {
+        scanning = false
+        if (activeStream === 'scan') activeStream = null
+        if (s.result) scanResult = s.result
+        else if (s.error) error = s.error
+      }
+    }).catch(() => {})
+
+    pollUntilDone<LynisResult>('security:lynis-audit-status', (s) => {
+      auditOutput = s.output
+      if (s.running) {
+        auditing = true
+        activeStream = 'audit'
+      } else {
+        auditing = false
+        if (activeStream === 'audit') activeStream = null
+        if (s.result) lynisResult = s.result
+        else if (s.error) error = s.error
+      }
+    }).catch(() => {})
+  }
+
   onMount(() => {
     void load()
+    rehydrate()
+    loadExcludePrefs()
     const api = (window as unknown as Window & {
       electronAPI: { onSecurityProgress: (callback: (output: string) => void) => () => void }
     }).electronAPI
     return api.onSecurityProgress((output) => {
       if (activeStream === 'scan') scanOutput = (scanOutput + output).slice(-4000)
       else if (activeStream === 'audit') auditOutput = (auditOutput + output).slice(-4000)
+      else if (activeStream === 'install') installOutput = (installOutput + output).slice(-4000)
     })
   })
 
@@ -734,6 +884,9 @@
               <Download size={12} />
               {installing.has('clamav') ? 'Installing…' : 'Install ClamAV'}
             </button>
+            {#if installing.has('clamav') && installOutput}
+              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
+            {/if}
           {:else}
             <div class="flex items-center justify-between pt-2 gap-2">
               <p class="text-xs text-muted-foreground">
@@ -752,6 +905,54 @@
                   Scan Home Directory
                 {/if}
               </button>
+            </div>
+
+            <div class="rounded-lg bg-secondary/50 p-2.5">
+              <p class="text-xs font-medium mb-1.5">Skip while scanning</p>
+              <div class="flex flex-wrap gap-x-4 gap-y-1.5">
+                {#each EXCLUDE_OPTIONS as opt}
+                  <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={excludeChecked.has(opt.id)}
+                      onchange={() => toggleExclude(opt.id)}
+                      disabled={scanning}
+                      class="rounded border-border accent-primary"
+                    />
+                    {opt.label}
+                  </label>
+                {/each}
+              </div>
+              {#if customExcludes.length > 0}
+                <div class="flex flex-wrap gap-1.5 mt-2">
+                  {#each customExcludes as c}
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-card border border-border flex items-center gap-1">
+                      {c}
+                      <button
+                        onclick={() => removeCustomExclude(c)}
+                        disabled={scanning}
+                        aria-label={`Remove ${c}`}
+                        class="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                      >×</button>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              <div class="flex items-center gap-1.5 mt-2">
+                <input
+                  type="text"
+                  bind:value={customExcludeInput}
+                  onkeydown={(e) => e.key === 'Enter' && addCustomExclude()}
+                  disabled={scanning}
+                  placeholder="Add a folder name to skip…"
+                  class="flex-1 text-xs px-2 py-1 rounded-md border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+                />
+                <button
+                  onclick={addCustomExclude}
+                  disabled={scanning}
+                  class="text-xs px-2 py-1 rounded-md border border-border hover:bg-secondary transition-colors disabled:opacity-50"
+                >Add</button>
+              </div>
             </div>
 
             {#if scanning || scanOutput}
@@ -815,6 +1016,9 @@
               <Download size={12} />
               {installing.has('lynis') ? 'Installing…' : 'Install Lynis'}
             </button>
+            {#if installing.has('lynis') && installOutput}
+              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
+            {/if}
           {:else}
             <div class="flex items-center justify-between pt-2 gap-2">
               <p class="text-xs text-muted-foreground">Needs admin password · full audit takes ~1-2 min</p>
@@ -858,7 +1062,7 @@
                   <p class="text-xs font-medium text-destructive mb-1">
                     {lynisResult.warningsCount} Warning{lynisResult.warningsCount === 1 ? '' : 's'}
                   </p>
-                  <ul class="space-y-1">
+                  <ul class="space-y-1 max-h-48 overflow-y-auto">
                     {#each lynisResult.warnings as w}
                       <li class="text-xs text-muted-foreground">• {w}</li>
                     {/each}
@@ -871,8 +1075,8 @@
                   <p class="text-xs font-medium mb-1">
                     {lynisResult.suggestionsCount} Suggestion{lynisResult.suggestionsCount === 1 ? '' : 's'}
                   </p>
-                  <ul class="space-y-1">
-                    {#each lynisResult.suggestions.slice(0, 8) as s}
+                  <ul class="space-y-1 max-h-48 overflow-y-auto">
+                    {#each lynisResult.suggestions as s}
                       <li class="text-xs text-muted-foreground">• {s}</li>
                     {/each}
                   </ul>
@@ -882,6 +1086,67 @@
           {/if}
         </div>
       {/if}
+    </div>
+
+    <!-- Additional Hardening -->
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div class="flex items-center gap-2 px-4 py-3">
+        <ClipboardCheck size={18} class="text-muted-foreground" />
+        <p class="text-sm font-medium">Additional Hardening</p>
+      </div>
+      <div class="divide-y divide-border border-t border-border">
+        <div class="flex items-center justify-between px-4 py-3 gap-2">
+          <div>
+            <p class="text-sm">Residual Packages</p>
+            <p class="text-xs text-muted-foreground">
+              {status.residualPackages > 0
+                ? `${status.residualPackages} removed package${status.residualPackages === 1 ? '' : 's'} still have leftover config files`
+                : 'None found'}
+            </p>
+          </div>
+          {#if status.residualPackages > 0}
+            <button
+              onclick={purgeResidualPackages}
+              disabled={purging}
+              class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+            >
+              {#if purging}
+                <RefreshCw size={12} class="animate-spin" />
+                Purging…
+              {:else}
+                Purge
+              {/if}
+            </button>
+          {:else}
+            <CheckCircle2 size={16} class="text-green-400 shrink-0" />
+          {/if}
+        </div>
+
+        <div class="flex items-center justify-between px-4 py-3 gap-2">
+          <div>
+            <p class="text-sm">Unused Network Protocols</p>
+            <p class="text-xs text-muted-foreground">
+              {status.protocolsBlacklisted ? 'dccp/sctp/rds/tipc blocked from loading' : 'dccp/sctp/rds/tipc can still load'}
+            </p>
+          </div>
+          {#if !status.protocolsBlacklisted}
+            <button
+              onclick={blacklistProtocols}
+              disabled={blacklisting}
+              class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+            >
+              {#if blacklisting}
+                <RefreshCw size={12} class="animate-spin" />
+                Applying…
+              {:else}
+                Blacklist
+              {/if}
+            </button>
+          {:else}
+            <CheckCircle2 size={16} class="text-green-400 shrink-0" />
+          {/if}
+        </div>
+      </div>
     </div>
 
   {/if}

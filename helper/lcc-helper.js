@@ -449,6 +449,37 @@ const ops = {
     console.log('Lynis audit complete')
   },
 
+  // Takes no arguments — the package list comes from dpkg's own residual
+  // ("rc" state) packages, not from the caller, so nothing here can be used
+  // to purge an arbitrary package.
+  async 'purge-residual-packages'() {
+    const listing = execSync('dpkg -l | awk \'$1=="rc"{print $2}\'', { encoding: 'utf8' })
+    const packages = listing.split('\n').map((s) => s.trim()).filter(Boolean)
+    if (packages.length === 0) {
+      console.log('No residual packages to purge')
+      return
+    }
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', ...packages], env)
+    console.log(`Purged ${packages.length} residual package(s): ${packages.join(', ')}`)
+  },
+
+  // Fixed, non-parameterized content — nothing here comes from the caller.
+  'blacklist-unused-protocols'() {
+    const confPath = '/etc/modprobe.d/lcc-blacklist-unused-protocols.conf'
+    const content = [
+      '# Added by Linux Command Centre — disables kernel modules for network',
+      '# protocols not used by default, reducing kernel attack surface.',
+      'install dccp /bin/true',
+      'install sctp /bin/true',
+      'install rds /bin/true',
+      'install tipc /bin/true',
+      ''
+    ].join('\n')
+    writeFileSync(confPath, content, 'utf8')
+    console.log(`Wrote ${confPath}`)
+  },
+
   'user-add'(username, fullName) {
     if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
     const args = ['-m', '-s', '/bin/bash']

@@ -1797,8 +1797,17 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   }
 
+  async function getResidualPackagesCount(): Promise<number> {
+    const out = await run('dpkg -l | awk \'$1=="rc"{print $2}\' | wc -l').catch(() => '0')
+    return parseInt(out.trim(), 10) || 0
+  }
+
+  function getProtocolBlacklistStatus(): boolean {
+    return existsSync('/etc/modprobe.d/lcc-blacklist-unused-protocols.conf')
+  }
+
   ipcMain.handle('security:status', async () => {
-    const [firewall, ports, ssh, encryption, failedLogins, updates, autoUpdates, clamav, lynis] = await Promise.all([
+    const [firewall, ports, ssh, encryption, failedLogins, updates, autoUpdates, clamav, lynis, residualPackages] = await Promise.all([
       getFirewallStatus(),
       getOpenPorts(),
       getSshStatus(),
@@ -1807,7 +1816,8 @@ export async function registerIpcHandlers(): Promise<void> {
       getSecurityUpdates(),
       getAutoUpdatesStatus(),
       getClamavStatus(),
-      getLynisStatus()
+      getLynisStatus(),
+      getResidualPackagesCount()
     ])
 
     return {
@@ -1820,8 +1830,18 @@ export async function registerIpcHandlers(): Promise<void> {
       kernelUpdates: updates.kernelUpdates,
       autoUpdates,
       clamav,
-      lynis
+      lynis,
+      residualPackages,
+      protocolsBlacklisted: getProtocolBlacklistStatus()
     }
+  })
+
+  ipcMain.handle('security:purge-residual', async () => {
+    return privilegedOp('purge-residual-packages')
+  })
+
+  ipcMain.handle('security:blacklist-protocols', async () => {
+    return privilegedOp('blacklist-unused-protocols')
   })
 
   ipcMain.handle('firewall:set', async (_, action: 'enable' | 'disable') => {
@@ -1835,71 +1855,166 @@ export async function registerIpcHandlers(): Promise<void> {
     return privilegedOp('service-action', action, service.trim() || 'ssh.service')
   })
 
-  ipcMain.handle('security:install-tool', async (_, name: 'clamav' | 'lynis' | 'unattended-upgrades') => {
+  ipcMain.handle('security:install-tool', async (event, name: 'clamav' | 'lynis' | 'unattended-upgrades') => {
     if (!['clamav', 'lynis', 'unattended-upgrades'].includes(name)) throw new Error('Invalid tool')
-    return privilegedOp('tool-install', name)
+    // apt-get update + install routinely runs past privilegedOp's 30s timeout, and killing
+    // a timed-out pkexec child fails with EPERM once it's running as root — the install
+    // then keeps going in the background while we report a spurious failure. Streaming has
+    // no timeout, which is correct here: DEBIAN_FRONTEND=noninteractive means it can't hang
+    // on a prompt, so there's nothing to time out against.
+    return privilegedOpStreaming('tool-install', [name], (out) => {
+      if (!event.sender.isDestroyed()) event.sender.send('security:progress', out)
+    })
   })
 
   ipcMain.handle('security:set-auto-updates', async (_, enabled: boolean) => {
     return privilegedOp('set-auto-upgrades', enabled ? 'true' : 'false')
   })
 
-  ipcMain.handle('security:clamav-scan', async (event) => {
-    const clamscanBin = await run('which clamscan 2>/dev/null').catch(() => '')
-    if (!clamscanBin.trim()) throw new Error('ClamAV is not installed')
-    const target = homedir()
+  type ScanResult = { scanned: number; infected: number; clean: boolean }
+  type LynisAuditResult = {
+    hardeningIndex: number | null
+    warnings: string[]
+    warningsCount: number
+    suggestions: string[]
+    suggestionsCount: number
+  }
+  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null }
 
-    return new Promise<{ scanned: number; infected: number; clean: boolean }>((resolve, reject) => {
-      const child = spawn('clamscan', ['-r', '--infected', '--stdout', `--exclude-dir=^${target}/\\.cache`, target])
-      let stdout = ''
-      child.stdout.on('data', (d: Buffer) => {
-        const s = d.toString()
-        stdout += s
-        if (!event.sender.isDestroyed()) event.sender.send('security:progress', s)
-      })
-      child.stderr.on('data', (d: Buffer) => {
-        if (!event.sender.isDestroyed()) event.sender.send('security:progress', d.toString())
-      })
-      child.on('error', (err) => reject(new Error(err.message)))
-      child.on('close', (code) => {
-        // clamscan exit codes: 0 = clean, 1 = infected file(s) found, 2 = error
-        if (code === 2) return reject(new Error('clamscan encountered an error — see output for details'))
-        const scannedMatch = stdout.match(/Scanned files:\s*(\d+)/)
-        const infectedMatch = stdout.match(/Infected files:\s*(\d+)/)
-        resolve({
-          scanned: scannedMatch ? parseInt(scannedMatch[1], 10) : 0,
-          infected: infectedMatch ? parseInt(infectedMatch[1], 10) : 0,
-          clean: code === 0
-        })
-      })
-    })
-  })
+  // Tracked at module scope (not per-invoke-call) so a renderer that remounts
+  // mid-operation — a tab switch, an HMR reload, anything that recreates the
+  // Svelte component — can ask "what's actually happening" instead of
+  // assuming nothing is, and losing track of a scan/audit that's still
+  // running as a real child process regardless of what the UI believes.
+  const clamavScanState: OpState<ScanResult> = { running: false, output: '', result: null, error: null }
+  const lynisAuditState: OpState<LynisAuditResult> = { running: false, output: '', result: null, error: null }
 
-  ipcMain.handle('security:lynis-audit', async (event) => {
-    const output = await privilegedOpStreaming('lynis-audit', [], (out) => {
-      if (!event.sender.isDestroyed()) event.sender.send('security:progress', out)
-    })
-
+  function parseLynisOutput(output: string): LynisAuditResult {
     const hardeningMatch = output.match(/Hardening index\s*:\s*(\d+)/)
     const warningsCountMatch = output.match(/Warnings?\s*\((\d+)\)/i)
     const suggestionsCountMatch = output.match(/Suggestions\s*\((\d+)\)/i)
 
-    const extractBullets = (sectionHeader: RegExp, marker: string): string[] => {
-      const startIdx = output.search(sectionHeader)
-      if (startIdx === -1) return []
-      const section = output.slice(startIdx).split(/\n\s*\n/)[0]
-      return [...section.matchAll(new RegExp(`^\\s*\\${marker}\\s+(.+?)\\s*$`, 'gm'))]
+    // Lynis puts a blank line between every individual bullet (each one is
+    // followed by a "https://cisofy.com/..." reference line, then a blank
+    // line before the next), so bounding a section at the first blank line
+    // only ever captures its first entry. Bound by the next real section
+    // marker instead, then pull every bulleted line out of that whole slice.
+    const extractSection = (start: RegExp, end: RegExp[]): string => {
+      const startMatch = output.match(start)
+      if (!startMatch || startMatch.index === undefined) return ''
+      const from = startMatch.index + startMatch[0].length
+      let to = output.length
+      for (const pattern of end) {
+        const endMatch = output.slice(from).match(pattern)
+        if (endMatch && endMatch.index !== undefined) to = Math.min(to, from + endMatch.index)
+      }
+      return output.slice(from, to)
+    }
+
+    const extractBullets = (section: string, marker: string): string[] =>
+      [...section.matchAll(new RegExp(`^\\s*\\${marker}\\s+(.+?)\\s*$`, 'gm'))]
         .map(m => m[1].replace(/\s*\[[\w-]+\]\s*$/, '').trim())
         .filter(Boolean)
-        .slice(0, 15)
-    }
+
+    const sectionEnd = [/Suggestions\s*\(\d+\):/i, /Follow-up:/i, /={10,}/]
+    const warningsSection = extractSection(/Warnings?\s*\(\d+\):/i, sectionEnd)
+    const suggestionsSection = extractSection(/Suggestions\s*\(\d+\):/i, sectionEnd.slice(1))
 
     return {
       hardeningIndex: hardeningMatch ? parseInt(hardeningMatch[1], 10) : null,
-      warnings: extractBullets(/Warnings?\s*\(\d+\):/i, '!'),
+      warnings: extractBullets(warningsSection, '!'),
       warningsCount: warningsCountMatch ? parseInt(warningsCountMatch[1], 10) : 0,
-      suggestions: extractBullets(/Suggestions\s*\(\d+\):/i, '*'),
+      suggestions: extractBullets(suggestionsSection, '*'),
       suggestionsCount: suggestionsCountMatch ? parseInt(suggestionsCountMatch[1], 10) : 0
+    }
+  }
+
+  ipcMain.handle('security:clamav-scan-status', () => clamavScanState)
+  ipcMain.handle('security:lynis-audit-status', () => lynisAuditState)
+
+  ipcMain.handle('security:clamav-scan', async (event, excludeFragments?: string[]) => {
+    if (clamavScanState.running) throw new Error('A scan is already in progress')
+    const clamscanBin = await run('which clamscan 2>/dev/null').catch(() => '')
+    if (!clamscanBin.trim()) throw new Error('ClamAV is not installed')
+    const target = homedir()
+
+    // Fragments are plain directory-name text from the renderer's exclude
+    // checklist/custom list, not regexes — escape them before building the
+    // pattern so a fragment like "foo.bar" matches literally rather than
+    // "foo<any char>bar". This only narrows the caller's own unprivileged
+    // scan of their own files, so there's no injection/security boundary
+    // here, just correctness: spawn() takes argv directly, no shell involved.
+    const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const fragments = (Array.isArray(excludeFragments) ? excludeFragments : [])
+      .filter((f): f is string => typeof f === 'string' && f.trim().length > 0 && f.length <= 200)
+      .slice(0, 30)
+    const excludeArgs = fragments.map((f) => `--exclude-dir=(^|/)${escapeRegex(f.trim())}($|/)`)
+
+    clamavScanState.running = true
+    clamavScanState.output = ''
+    clamavScanState.result = null
+    clamavScanState.error = null
+
+    const broadcast = (s: string): void => {
+      clamavScanState.output = (clamavScanState.output + s).slice(-4000)
+      if (!event.sender.isDestroyed()) event.sender.send('security:progress', s)
+    }
+
+    try {
+      const result = await new Promise<ScanResult>((resolve, reject) => {
+        // No --infected: that flag suppresses output for every clean file, so on a
+        // large, all-clean dev home directory the live progress box would show
+        // nothing at all until the scan finished, looking indistinguishable from
+        // hung. Printing every file gives visible progress at negligible cost —
+        // clamscan already reads and scans each file regardless of this flag.
+        const child = spawn('clamscan', ['-r', '--stdout', ...excludeArgs, target])
+        let stdout = ''
+        child.stdout.on('data', (d: Buffer) => { const s = d.toString(); stdout += s; broadcast(s) })
+        child.stderr.on('data', (d: Buffer) => broadcast(d.toString()))
+        child.on('error', (err) => reject(new Error(err.message)))
+        child.on('close', (code) => {
+          // clamscan exit codes: 0 = clean, 1 = infected file(s) found, 2 = error
+          if (code === 2) return reject(new Error('clamscan encountered an error — see output for details'))
+          const scannedMatch = stdout.match(/Scanned files:\s*(\d+)/)
+          const infectedMatch = stdout.match(/Infected files:\s*(\d+)/)
+          resolve({
+            scanned: scannedMatch ? parseInt(scannedMatch[1], 10) : 0,
+            infected: infectedMatch ? parseInt(infectedMatch[1], 10) : 0,
+            clean: code === 0
+          })
+        })
+      })
+      clamavScanState.result = result
+      return result
+    } catch (e) {
+      clamavScanState.error = e instanceof Error ? e.message : String(e)
+      throw e
+    } finally {
+      clamavScanState.running = false
+    }
+  })
+
+  ipcMain.handle('security:lynis-audit', async (event) => {
+    if (lynisAuditState.running) throw new Error('An audit is already in progress')
+
+    lynisAuditState.running = true
+    lynisAuditState.output = ''
+    lynisAuditState.result = null
+    lynisAuditState.error = null
+
+    try {
+      const output = await privilegedOpStreaming('lynis-audit', [], (out) => {
+        lynisAuditState.output = (lynisAuditState.output + out).slice(-4000)
+        if (!event.sender.isDestroyed()) event.sender.send('security:progress', out)
+      })
+      const result = parseLynisOutput(output)
+      lynisAuditState.result = result
+      return result
+    } catch (e) {
+      lynisAuditState.error = e instanceof Error ? e.message : String(e)
+      throw e
+    } finally {
+      lynisAuditState.running = false
     }
   })
 
