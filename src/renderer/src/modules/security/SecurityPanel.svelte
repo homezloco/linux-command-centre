@@ -6,7 +6,7 @@
     Lock, Unlock, Eye, EyeOff, RefreshCw,
     Terminal, HardDrive, Globe, Users, AlertTriangle,
     CheckCircle2, XCircle, ChevronDown, ChevronUp,
-    Power
+    Power, Bug, ClipboardCheck, Download, Play
   } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert from '$lib/Alert.svelte'
@@ -47,6 +47,36 @@
     devices: { name: string; type: string; encrypted: boolean }[]
   }
 
+  type AutoUpdatesStatus = {
+    installed: boolean
+    enabled: boolean
+    timerActive: boolean
+  }
+
+  type ClamavStatus = {
+    installed: boolean
+    freshclamActive: boolean
+    lastDbUpdate: string | null
+  }
+
+  type LynisStatus = {
+    installed: boolean
+  }
+
+  type LynisResult = {
+    hardeningIndex: number | null
+    warnings: string[]
+    warningsCount: number
+    suggestions: string[]
+    suggestionsCount: number
+  }
+
+  type ScanResult = {
+    scanned: number
+    infected: number
+    clean: boolean
+  }
+
   type SecurityStatus = {
     firewall: FirewallStatus | null
     ports: PortInfo[]
@@ -55,6 +85,9 @@
     encryption: EncryptionStatus | null
     securityUpdates: number
     kernelUpdates: boolean
+    autoUpdates: AutoUpdatesStatus | null
+    clamav: ClamavStatus | null
+    lynis: LynisStatus | null
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -68,11 +101,26 @@
     ssh: true,
     encryption: true,
     updates: true,
-    logins: false
+    logins: false,
+    autoUpdates: true,
+    clamav: false,
+    lynis: false
   })
 
   let firewallToggling = $state(false)
   let sshToggling = $state(false)
+  let autoUpdatesToggling = $state(false)
+  let installing = $state<Set<string>>(new Set())
+
+  let scanning = $state(false)
+  let scanOutput = $state('')
+  let scanResult = $state<ScanResult | null>(null)
+
+  let auditing = $state(false)
+  let auditOutput = $state('')
+  let lynisResult = $state<LynisResult | null>(null)
+
+  let activeStream = $state<'scan' | 'audit' | null>(null)
 
   // ── Load ────────────────────────────────────────────────────────────────────
   async function load(force = false) {
@@ -118,7 +166,71 @@
     }
   }
 
-  onMount(() => load())
+  async function toggleAutoUpdates() {
+    if (!status?.autoUpdates) return
+    autoUpdatesToggling = true
+    try {
+      await invoke('security:set-auto-updates', !status.autoUpdates.enabled)
+      await load()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      autoUpdatesToggling = false
+    }
+  }
+
+  async function installTool(name: 'clamav' | 'lynis' | 'unattended-upgrades') {
+    installing = new Set([...installing, name])
+    try {
+      await invoke('security:install-tool', name)
+      await load()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      installing = new Set([...installing].filter(n => n !== name))
+    }
+  }
+
+  async function runClamavScan() {
+    scanning = true
+    scanOutput = ''
+    scanResult = null
+    activeStream = 'scan'
+    try {
+      scanResult = await invoke<ScanResult>('security:clamav-scan')
+    } catch (e) {
+      error = String(e)
+    } finally {
+      scanning = false
+      activeStream = null
+    }
+  }
+
+  async function runLynisAudit() {
+    auditing = true
+    auditOutput = ''
+    lynisResult = null
+    activeStream = 'audit'
+    try {
+      lynisResult = await invoke<LynisResult>('security:lynis-audit')
+    } catch (e) {
+      error = String(e)
+    } finally {
+      auditing = false
+      activeStream = null
+    }
+  }
+
+  onMount(() => {
+    void load()
+    const api = (window as unknown as Window & {
+      electronAPI: { onSecurityProgress: (callback: (output: string) => void) => () => void }
+    }).electronAPI
+    return api.onSecurityProgress((output) => {
+      if (activeStream === 'scan') scanOutput = (scanOutput + output).slice(-4000)
+      else if (activeStream === 'audit') auditOutput = (auditOutput + output).slice(-4000)
+    })
+  })
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function toggleSection(key: string) {
@@ -514,6 +626,259 @@
                 </div>
               {/each}
             </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Automatic Security Updates -->
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors">
+        <button
+          onclick={() => toggleSection('autoUpdates')}
+          class="flex items-center gap-3 flex-1 text-left"
+          aria-label="Toggle automatic updates section"
+        >
+          <RefreshCw size={18} class={status.autoUpdates?.enabled ? 'text-green-400' : status.autoUpdates?.installed ? 'text-yellow-400' : 'text-muted-foreground'} />
+          <div class="text-left">
+            <p class="text-sm font-medium">Automatic Security Updates</p>
+            <p class="text-xs text-muted-foreground">
+              {#if status.autoUpdates?.enabled}
+                Enabled{status.autoUpdates.timerActive ? '' : ' · timer inactive'}
+              {:else if status.autoUpdates?.installed}
+                Installed but disabled
+              {:else}
+                Not installed
+              {/if}
+            </p>
+          </div>
+        </button>
+        <div class="flex items-center gap-2">
+          {#if status.autoUpdates?.installed}
+            <button
+              onclick={toggleAutoUpdates}
+              disabled={autoUpdatesToggling}
+              aria-label="Toggle automatic updates"
+              class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
+                     {status.autoUpdates.enabled ? 'bg-green-400' : 'bg-secondary border border-border'}"
+            >
+              <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform
+                           {status.autoUpdates.enabled ? 'translate-x-5' : ''}"></span>
+            </button>
+          {:else}
+            <button
+              onclick={() => installTool('unattended-upgrades')}
+              disabled={installing.has('unattended-upgrades')}
+              class="text-xs px-2 py-1 rounded-md border border-border hover:bg-secondary transition-colors flex items-center gap-1 disabled:opacity-50"
+            >
+              <Download size={12} />
+              {installing.has('unattended-upgrades') ? 'Installing…' : 'Install'}
+            </button>
+          {/if}
+          <button onclick={() => toggleSection('autoUpdates')} aria-label="Expand automatic updates" class="text-muted-foreground">
+            {#if expanded.autoUpdates}<ChevronUp size={16} />{:else}<ChevronDown size={16} />{/if}
+          </button>
+        </div>
+      </div>
+
+      {#if expanded.autoUpdates && status.autoUpdates?.installed && !status.autoUpdates.enabled}
+        <div class="px-4 pb-4 pt-1 border-t border-border">
+          <div class="rounded-lg bg-yellow-400/10 border border-yellow-400/30 p-2.5 mt-2">
+            <p class="text-xs text-yellow-400 flex items-center gap-1.5">
+              <AlertTriangle size={12} />
+              Security patches won't install themselves until this is enabled
+            </p>
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ClamAV -->
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <button
+        onclick={() => toggleSection('clamav')}
+        class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
+      >
+        <div class="flex items-center gap-3">
+          <Bug size={18} class={scanResult && scanResult.infected > 0 ? 'text-destructive' : status.clamav?.installed ? 'text-green-400' : 'text-muted-foreground'} />
+          <div class="text-left">
+            <p class="text-sm font-medium">Antivirus (ClamAV)</p>
+            <p class="text-xs text-muted-foreground">
+              {#if scanning}
+                Scanning home directory…
+              {:else if scanResult}
+                {scanResult.infected > 0 ? `${scanResult.infected} infected file(s) found` : `Clean · ${scanResult.scanned} files scanned`}
+              {:else if status.clamav?.installed}
+                {status.clamav.lastDbUpdate ? `Definitions updated ${new Date(status.clamav.lastDbUpdate).toLocaleDateString()}` : 'Definitions not yet downloaded'}
+              {:else}
+                Not installed
+              {/if}
+            </p>
+          </div>
+        </div>
+        {#if expanded.clamav}
+          <ChevronUp size={16} class="text-muted-foreground" />
+        {:else}
+          <ChevronDown size={16} class="text-muted-foreground" />
+        {/if}
+      </button>
+
+      {#if expanded.clamav}
+        <div class="px-4 pb-4 pt-1 border-t border-border space-y-2">
+          {#if !status.clamav?.installed}
+            <button
+              onclick={() => installTool('clamav')}
+              disabled={installing.has('clamav')}
+              class="mt-2 w-full text-xs px-3 py-2 rounded-lg border border-border hover:bg-secondary transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              <Download size={12} />
+              {installing.has('clamav') ? 'Installing…' : 'Install ClamAV'}
+            </button>
+          {:else}
+            <div class="flex items-center justify-between pt-2 gap-2">
+              <p class="text-xs text-muted-foreground">
+                {status.clamav.freshclamActive ? 'Virus definitions auto-update' : 'Definition auto-update service inactive'}
+              </p>
+              <button
+                onclick={runClamavScan}
+                disabled={scanning || auditing}
+                class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+              >
+                {#if scanning}
+                  <RefreshCw size={12} class="animate-spin" />
+                  Scanning…
+                {:else}
+                  <Play size={12} />
+                  Scan Home Directory
+                {/if}
+              </button>
+            </div>
+
+            {#if scanning || scanOutput}
+              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{scanOutput || 'Starting scan…'}</pre>
+            {/if}
+
+            {#if scanResult && scanResult.infected > 0}
+              <div class="rounded-lg bg-destructive/10 border border-destructive/30 p-2.5">
+                <p class="text-xs text-destructive flex items-center gap-1.5">
+                  <AlertTriangle size={12} />
+                  {scanResult.infected} infected file(s) — see output above for paths
+                </p>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Lynis Hardening Audit -->
+    <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <button
+        onclick={() => toggleSection('lynis')}
+        class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
+      >
+        <div class="flex items-center gap-3">
+          <ClipboardCheck
+            size={18}
+            class={!lynisResult ? 'text-muted-foreground' : lynisResult.hardeningIndex !== null && lynisResult.hardeningIndex >= 70 ? 'text-green-400' : 'text-yellow-400'}
+          />
+          <div class="text-left">
+            <p class="text-sm font-medium">Hardening Audit (Lynis)</p>
+            <p class="text-xs text-muted-foreground">
+              {#if auditing}
+                Running audit…
+              {:else if lynisResult}
+                Hardening index {lynisResult.hardeningIndex ?? '—'}/100 · {lynisResult.warningsCount} warning{lynisResult.warningsCount === 1 ? '' : 's'}
+              {:else if status.lynis?.installed}
+                Not yet run this session
+              {:else}
+                Not installed
+              {/if}
+            </p>
+          </div>
+        </div>
+        {#if expanded.lynis}
+          <ChevronUp size={16} class="text-muted-foreground" />
+        {:else}
+          <ChevronDown size={16} class="text-muted-foreground" />
+        {/if}
+      </button>
+
+      {#if expanded.lynis}
+        <div class="px-4 pb-4 pt-1 border-t border-border space-y-2">
+          {#if !status.lynis?.installed}
+            <button
+              onclick={() => installTool('lynis')}
+              disabled={installing.has('lynis')}
+              class="mt-2 w-full text-xs px-3 py-2 rounded-lg border border-border hover:bg-secondary transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              <Download size={12} />
+              {installing.has('lynis') ? 'Installing…' : 'Install Lynis'}
+            </button>
+          {:else}
+            <div class="flex items-center justify-between pt-2 gap-2">
+              <p class="text-xs text-muted-foreground">Needs admin password · full audit takes ~1-2 min</p>
+              <button
+                onclick={runLynisAudit}
+                disabled={scanning || auditing}
+                class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors flex items-center gap-1.5 disabled:opacity-50 shrink-0"
+              >
+                {#if auditing}
+                  <RefreshCw size={12} class="animate-spin" />
+                  Auditing…
+                {:else}
+                  <Play size={12} />
+                  Run Audit
+                {/if}
+              </button>
+            </div>
+
+            {#if auditing || auditOutput}
+              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{auditOutput || 'Starting audit…'}</pre>
+            {/if}
+
+            {#if lynisResult}
+              <div class="rounded-lg bg-secondary/50 p-2.5">
+                <div class="flex items-center justify-between mb-1">
+                  <p class="text-xs text-muted-foreground">Hardening Index</p>
+                  <p class="text-sm font-medium">{lynisResult.hardeningIndex ?? '—'}/100</p>
+                </div>
+                {#if lynisResult.hardeningIndex !== null}
+                  <div class="w-full h-1.5 rounded-full bg-border overflow-hidden">
+                    <div
+                      class="h-full rounded-full {lynisResult.hardeningIndex >= 70 ? 'bg-green-400' : lynisResult.hardeningIndex >= 50 ? 'bg-yellow-400' : 'bg-destructive'}"
+                      style="width: {lynisResult.hardeningIndex}%"
+                    ></div>
+                  </div>
+                {/if}
+              </div>
+
+              {#if lynisResult.warnings.length > 0}
+                <div class="rounded-lg bg-destructive/10 border border-destructive/30 p-2.5">
+                  <p class="text-xs font-medium text-destructive mb-1">
+                    {lynisResult.warningsCount} Warning{lynisResult.warningsCount === 1 ? '' : 's'}
+                  </p>
+                  <ul class="space-y-1">
+                    {#each lynisResult.warnings as w}
+                      <li class="text-xs text-muted-foreground">• {w}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+
+              {#if lynisResult.suggestions.length > 0}
+                <div class="rounded-lg bg-secondary/50 p-2.5">
+                  <p class="text-xs font-medium mb-1">
+                    {lynisResult.suggestionsCount} Suggestion{lynisResult.suggestionsCount === 1 ? '' : 's'}
+                  </p>
+                  <ul class="space-y-1">
+                    {#each lynisResult.suggestions.slice(0, 8) as s}
+                      <li class="text-xs text-muted-foreground">• {s}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+            {/if}
           {/if}
         </div>
       {/if}

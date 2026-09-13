@@ -9,5 +9,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('updates:progress', listener)
     return () => ipcRenderer.removeListener('updates:progress', listener)
   },
+  onSecurityProgress: (callback: (output: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, output: string): void => callback(output)
+    ipcRenderer.on('security:progress', listener)
+    return () => ipcRenderer.removeListener('security:progress', listener)
+  },
   streamPort: 52341
 })

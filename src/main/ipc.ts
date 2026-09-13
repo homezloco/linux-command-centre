@@ -1751,14 +1751,63 @@ export async function registerIpcHandlers(): Promise<void> {
     }
   }
 
+  async function getAutoUpdatesStatus() {
+    try {
+      const dpkgOut = await run('dpkg-query -W -f=\'${Status}\' unattended-upgrades 2>/dev/null').catch(() => '')
+      const installed = dpkgOut.includes('install ok installed')
+      const conf = await readFile('/etc/apt/apt.conf.d/20auto-upgrades', 'utf8').catch(() => '')
+      const enabled = /APT::Periodic::Unattended-Upgrade\s+"1"/.test(conf)
+      const timerOut = await run('systemctl is-active apt-daily-upgrade.timer 2>/dev/null').catch(() => '')
+      const timerActive = timerOut.trim() === 'active'
+      return { installed, enabled, timerActive }
+    } catch {
+      return { installed: false, enabled: false, timerActive: false }
+    }
+  }
+
+  async function getClamavStatus() {
+    try {
+      const dpkgOut = await run('dpkg-query -W -f=\'${Status}\' clamav 2>/dev/null').catch(() => '')
+      const clamscanBin = await run('which clamscan 2>/dev/null').catch(() => '')
+      const installed = dpkgOut.includes('install ok installed') || clamscanBin.trim().length > 0
+
+      let lastDbUpdate: string | null = null
+      for (const dbFile of ['/var/lib/clamav/daily.cvd', '/var/lib/clamav/daily.cld']) {
+        const stat = await run(`stat -c %Y ${dbFile} 2>/dev/null`).catch(() => '')
+        if (stat.trim()) { lastDbUpdate = new Date(parseInt(stat.trim(), 10) * 1000).toISOString(); break }
+      }
+
+      const freshclamOut = await run('systemctl is-active clamav-freshclam 2>/dev/null').catch(() => '')
+      const freshclamActive = freshclamOut.trim() === 'active'
+
+      return { installed, freshclamActive, lastDbUpdate }
+    } catch {
+      return { installed: false, freshclamActive: false, lastDbUpdate: null }
+    }
+  }
+
+  async function getLynisStatus() {
+    try {
+      const dpkgOut = await run('dpkg-query -W -f=\'${Status}\' lynis 2>/dev/null').catch(() => '')
+      const lynisBin = await run('which lynis 2>/dev/null').catch(() => '')
+      const installed = dpkgOut.includes('install ok installed') || lynisBin.trim().length > 0
+      return { installed }
+    } catch {
+      return { installed: false }
+    }
+  }
+
   ipcMain.handle('security:status', async () => {
-    const [firewall, ports, ssh, encryption, failedLogins, updates] = await Promise.all([
+    const [firewall, ports, ssh, encryption, failedLogins, updates, autoUpdates, clamav, lynis] = await Promise.all([
       getFirewallStatus(),
       getOpenPorts(),
       getSshStatus(),
       getEncryptionStatus(),
       getFailedLogins(),
-      getSecurityUpdates()
+      getSecurityUpdates(),
+      getAutoUpdatesStatus(),
+      getClamavStatus(),
+      getLynisStatus()
     ])
 
     return {
@@ -1768,7 +1817,10 @@ export async function registerIpcHandlers(): Promise<void> {
       encryption,
       failedLogins,
       securityUpdates: updates.securityUpdates,
-      kernelUpdates: updates.kernelUpdates
+      kernelUpdates: updates.kernelUpdates,
+      autoUpdates,
+      clamav,
+      lynis
     }
   })
 
@@ -1781,6 +1833,74 @@ export async function registerIpcHandlers(): Promise<void> {
     if (!['start', 'stop'].includes(action)) throw new Error('Invalid action')
     const service = await run('systemctl list-unit-files | grep -E "^(ssh|sshd)\\.service" | head -1 | cut -d" " -f1').catch(() => 'ssh.service')
     return privilegedOp('service-action', action, service.trim() || 'ssh.service')
+  })
+
+  ipcMain.handle('security:install-tool', async (_, name: 'clamav' | 'lynis' | 'unattended-upgrades') => {
+    if (!['clamav', 'lynis', 'unattended-upgrades'].includes(name)) throw new Error('Invalid tool')
+    return privilegedOp('tool-install', name)
+  })
+
+  ipcMain.handle('security:set-auto-updates', async (_, enabled: boolean) => {
+    return privilegedOp('set-auto-upgrades', enabled ? 'true' : 'false')
+  })
+
+  ipcMain.handle('security:clamav-scan', async (event) => {
+    const clamscanBin = await run('which clamscan 2>/dev/null').catch(() => '')
+    if (!clamscanBin.trim()) throw new Error('ClamAV is not installed')
+    const target = homedir()
+
+    return new Promise<{ scanned: number; infected: number; clean: boolean }>((resolve, reject) => {
+      const child = spawn('clamscan', ['-r', '--infected', '--stdout', `--exclude-dir=^${target}/\\.cache`, target])
+      let stdout = ''
+      child.stdout.on('data', (d: Buffer) => {
+        const s = d.toString()
+        stdout += s
+        if (!event.sender.isDestroyed()) event.sender.send('security:progress', s)
+      })
+      child.stderr.on('data', (d: Buffer) => {
+        if (!event.sender.isDestroyed()) event.sender.send('security:progress', d.toString())
+      })
+      child.on('error', (err) => reject(new Error(err.message)))
+      child.on('close', (code) => {
+        // clamscan exit codes: 0 = clean, 1 = infected file(s) found, 2 = error
+        if (code === 2) return reject(new Error('clamscan encountered an error — see output for details'))
+        const scannedMatch = stdout.match(/Scanned files:\s*(\d+)/)
+        const infectedMatch = stdout.match(/Infected files:\s*(\d+)/)
+        resolve({
+          scanned: scannedMatch ? parseInt(scannedMatch[1], 10) : 0,
+          infected: infectedMatch ? parseInt(infectedMatch[1], 10) : 0,
+          clean: code === 0
+        })
+      })
+    })
+  })
+
+  ipcMain.handle('security:lynis-audit', async (event) => {
+    const output = await privilegedOpStreaming('lynis-audit', [], (out) => {
+      if (!event.sender.isDestroyed()) event.sender.send('security:progress', out)
+    })
+
+    const hardeningMatch = output.match(/Hardening index\s*:\s*(\d+)/)
+    const warningsCountMatch = output.match(/Warnings?\s*\((\d+)\)/i)
+    const suggestionsCountMatch = output.match(/Suggestions\s*\((\d+)\)/i)
+
+    const extractBullets = (sectionHeader: RegExp, marker: string): string[] => {
+      const startIdx = output.search(sectionHeader)
+      if (startIdx === -1) return []
+      const section = output.slice(startIdx).split(/\n\s*\n/)[0]
+      return [...section.matchAll(new RegExp(`^\\s*\\${marker}\\s+(.+?)\\s*$`, 'gm'))]
+        .map(m => m[1].replace(/\s*\[[\w-]+\]\s*$/, '').trim())
+        .filter(Boolean)
+        .slice(0, 15)
+    }
+
+    return {
+      hardeningIndex: hardeningMatch ? parseInt(hardeningMatch[1], 10) : null,
+      warnings: extractBullets(/Warnings?\s*\(\d+\):/i, '!'),
+      warningsCount: warningsCountMatch ? parseInt(warningsCountMatch[1], 10) : 0,
+      suggestions: extractBullets(/Suggestions\s*\(\d+\):/i, '*'),
+      suggestionsCount: suggestionsCountMatch ? parseInt(suggestionsCountMatch[1], 10) : 0
+    }
   })
 
   // ── Storage ────────────────────────────────────────────────────────────────

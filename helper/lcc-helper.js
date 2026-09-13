@@ -55,6 +55,20 @@ function runApt(args, env) {
   })
 }
 
+// Like runApt but for an arbitrary command, and never rejects on a non-zero
+// exit — lynis in particular returns non-zero for reasons unrelated to
+// whether the audit actually completed, so the caller inspects stdout itself.
+function runLive(cmd, args, env) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { env })
+    let stdout = ''
+    child.stdout.on('data', (d) => { stdout += d.toString(); process.stdout.write(d) })
+    child.stderr.on('data', (d) => { process.stderr.write(d) })
+    child.on('error', (err) => resolve({ code: -1, stdout, error: err }))
+    child.on('close', (code) => resolve({ code, stdout }))
+  })
+}
+
 const ops = {
   'set-battery-threshold'(valueStr) {
     const value = parseInt(valueStr)
@@ -397,6 +411,42 @@ const ops = {
       await runApt(['-o', 'DPkg::Lock::Timeout=300', ...phased, 'install', '-y', ...remaining], env)
     }
     console.log('System upgrade completed')
+  },
+
+  // name is looked up in a fixed table rather than used directly as the apt
+  // package name, so this can never install anything but these three tools.
+  async 'tool-install'(name) {
+    const allowed = { clamav: 'clamav', lynis: 'lynis', 'unattended-upgrades': 'unattended-upgrades' }
+    const pkg = allowed[name]
+    if (!pkg) throw new Error('Unknown tool')
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'install', '-y', pkg], env)
+    console.log(`Installed ${pkg}`)
+  },
+
+  'set-auto-upgrades'(enabled) {
+    if (!['true', 'false'].includes(enabled)) throw new Error('Must be true or false')
+    const val = enabled === 'true' ? '1' : '0'
+    const confPath = '/etc/apt/apt.conf.d/20auto-upgrades'
+    writeFileSync(
+      confPath,
+      `APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "${val}";\n`,
+      'utf8'
+    )
+    // Timers ship enabled by default; re-enabling is a no-op if already on and
+    // recovers a system where they were previously stopped or masked.
+    try { execFileSync('systemctl', ['enable', '--now', 'apt-daily.timer', 'apt-daily-upgrade.timer']) } catch { /* best-effort */ }
+    console.log(`Unattended upgrades ${val === '1' ? 'enabled' : 'disabled'}`)
+  },
+
+  // Takes no arguments — this always runs the same fixed audit, so there's no
+  // user-controlled input that could turn this into arbitrary root execution.
+  async 'lynis-audit'() {
+    const { code, stdout, error } = await runLive('lynis', ['audit', 'system', '--quick', '--no-colors'])
+    if (error) throw new Error(error.code === 'ENOENT' ? 'lynis not found — install it first' : error.message)
+    if (!stdout.includes('Lynis')) throw new Error(`Lynis audit failed (exit ${code})`)
+    console.log('Lynis audit complete')
   },
 
   'user-add'(username, fullName) {
