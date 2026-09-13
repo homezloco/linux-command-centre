@@ -1,6 +1,20 @@
 #!/bin/bash
 set -e
 
-if [ -f "$SNAP/io.lcc.helper.policy" ]; then
-  install -Dm644 "$SNAP/io.lcc.helper.policy" /usr/share/polkit-1/actions/io.lcc.helper.policy
+# The policy is bundled at $SNAP/usr/share/polkit-1/actions/... (see
+# snap/snapcraft.yaml's override-build), not at $SNAP/ directly.
+POLICY_SRC="$SNAP/usr/share/polkit-1/actions/io.lcc.helper.policy"
+if [ -f "$POLICY_SRC" ]; then
+  install -Dm644 "$POLICY_SRC" /usr/share/polkit-1/actions/io.lcc.helper.policy
+fi
+
+# The polkit action is bound to the exact path of this wrapper script (see
+# helper/io.lcc.helper.policy), so it must be installed on the host at the
+# same fixed location the .deb/.rpm postinst uses.
+HELPER_JS="$SNAP/resources/helper/lcc-helper.js"
+HELPER_WRAPPER="$SNAP/resources/helper/lcc-helper"
+if [ -f "$HELPER_JS" ] && [ -f "$HELPER_WRAPPER" ]; then
+  install -d -m755 /usr/lib/linux-command-centre
+  install -m644 "$HELPER_JS" /usr/lib/linux-command-centre/lcc-helper.js
+  install -m755 "$HELPER_WRAPPER" /usr/lib/linux-command-centre/lcc-helper
 fi

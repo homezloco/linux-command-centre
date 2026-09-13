@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "preview": "electron-vite preview",
     "package": "npm run build && electron-builder"
   },
@@ -60,6 +61,14 @@
         "to": "helper/lcc-helper.js"
       },
       {
+        "from": "helper/lcc-helper",
+        "to": "helper/lcc-helper"
+      },
+      {
+        "from": "helper/io.lcc.helper.policy",
+        "to": "helper/io.lcc.helper.policy"
+      },
+      {
         "from": "build/icon.png",
         "to": "icon.png"
       }
@@ -95,6 +104,14 @@
         "StartupNotify": "true",
         "Terminal": "false"
       }
+    },
+    "deb": {
+      "afterInstall": "helper/after-install.sh",
+      "afterRemove": "helper/after-remove.sh"
+    },
+    "rpm": {
+      "afterInstall": "helper/after-install.sh",
+      "afterRemove": "helper/after-remove.sh"
     },
     "mac": {
       "hardenedRuntime": true,

@@ -1,12 +1,20 @@
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { app } from 'electron'
 
 const execFileAsync = promisify(execFile)
 
-/** Path to the privileged helper binary */
-function helperPath(): string {
+// Installed root:root, mode 0755, by the .deb/.rpm postinst script (see
+// helper/after-install.sh) or the snap's install/post-refresh hooks.
+// The polkit action io.lcc.helper.run is bound to this exact path — see
+// helper/io.lcc.helper.policy — so pkexec only auto-authorizes this fixed
+// script, never an arbitrary `pkexec node <anything>` invocation.
+const INSTALLED_WRAPPER = '/usr/lib/linux-command-centre/lcc-helper'
+
+/** Path to the helper script bundled with the app. */
+function helperScriptPath(): string {
   if (app.isPackaged) {
     return join(process.resourcesPath, 'helper', 'lcc-helper.js')
   }
@@ -14,13 +22,25 @@ function helperPath(): string {
 }
 
 /**
+ * Argv prefix used to reach the helper via pkexec. Prefers the installed
+ * wrapper so the polkit policy's exec.path match is meaningful. Falls back
+ * to invoking `node <script>` directly for AppImage/tar.gz builds (which
+ * have no postinst step to install the wrapper) and for `npm run dev` —
+ * in both cases pkexec falls back to its generic admin-auth prompt instead
+ * of the one bound to io.lcc.helper.run.
+ */
+function helperCommand(): string[] {
+  if (existsSync(INSTALLED_WRAPPER)) return [INSTALLED_WRAPPER]
+  return ['node', helperScriptPath()]
+}
+
+/**
  * Run a privileged operation via pkexec + lcc-helper.
  * Triggers the native GNOME polkit authentication dialog.
  */
 export async function privilegedOp(operation: string, ...args: string[]): Promise<string> {
-  const helper = helperPath()
   try {
-    const { stdout } = await execFileAsync('pkexec', ['node', helper, operation, ...args], {
+    const { stdout } = await execFileAsync('pkexec', [...helperCommand(), operation, ...args], {
       timeout: 30000
     })
     return stdout.trim()
@@ -40,9 +60,8 @@ export async function privilegedOp(operation: string, ...args: string[]): Promis
  * local process to race between our write and the root helper's read.
  */
 export function privilegedOpWithStdin(operation: string, args: string[], stdin: string): Promise<string> {
-  const helper = helperPath()
   return new Promise((resolve, reject) => {
-    const child = spawn('pkexec', ['node', helper, operation, ...args])
+    const child = spawn('pkexec', [...helperCommand(), operation, ...args])
     let stdout = ''
     let stderr = ''
 
@@ -70,9 +89,8 @@ export function privilegedOpStreaming(
   args: string[],
   onOutput: (output: string) => void
 ): Promise<string> {
-  const helper = helperPath()
   return new Promise((resolve, reject) => {
-    const child = spawn('pkexec', ['node', helper, operation, ...args])
+    const child = spawn('pkexec', [...helperCommand(), operation, ...args])
     let stdout = ''
     let stderr = ''
 

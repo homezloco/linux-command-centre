@@ -1,12 +1,14 @@
 import { ipcMain, net, app, clipboard } from 'electron'
-import { exec, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { sysread, sysexists, run, runFile } from './shell'
 import { privilegedOp, privilegedOpStreaming, privilegedOpWithStdin } from './privilege'
 import { selectProfile, evaluateProfile, type HwCheck } from './hardware-profiles'
 import { runDiagnostics } from './claude'
-import { existsSync } from 'fs'
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
+import { join } from 'path'
+import { IPC_CHANNELS } from '../shared/ipc-channels'
 
 interface UpdateItem {
   label: string
@@ -19,6 +21,23 @@ interface UpdateItem {
 }
 
 export async function registerIpcHandlers(): Promise<void> {
+  // Dev-time guard: warn if a handler is registered for a channel missing
+  // from src/shared/ipc-channels.ts, since the preload silently rejects
+  // calls to anything not on that list. Cheap enough to leave in, but only
+  // useful to a developer, so skip it in packaged builds.
+  if (!app.isPackaged) {
+    const allowedChannels = new Set<string>(IPC_CHANNELS)
+    const originalHandle = ipcMain.handle.bind(ipcMain)
+    ipcMain.handle = ((channel: string, listener: Parameters<typeof ipcMain.handle>[1]) => {
+      if (!allowedChannels.has(channel)) {
+        console.warn(
+          `[ipc] "${channel}" is registered but missing from src/shared/ipc-channels.ts — the preload will block it.`
+        )
+      }
+      return originalHandle(channel, listener)
+    }) as typeof ipcMain.handle
+  }
+
   // ── Battery ────────────────────────────────────────────────────────────────
   ipcMain.handle('battery:status', async () => {
     const batDir = await findBattery()
@@ -310,12 +329,41 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('wifi:connect', async (_, ssid: string, password?: string) => {
     // nmcli connect — works without root for active desktop user on Ubuntu
     try {
-      const args = ['device', 'wifi', 'connect', ssid]
-      if (password) args.push('password', password)
-      await runFile('nmcli', args)
+      if (password) {
+        // Keep the PSK off nmcli's argv (world-readable via /proc while the
+        // command runs): create the profile without the secret, then
+        // activate it with `passwd-file`, which reads wifi-sec.psk from a
+        // 0600 temp file. The lcc- prefix marks profiles we created so a
+        // retry can safely replace them.
+        const conName = `lcc-${ssid}`
+        await runFile('nmcli', ['connection', 'delete', conName]).catch(() => {})
+        await runFile('nmcli', ['connection', 'add', 'type', 'wifi',
+          'con-name', conName, 'ssid', ssid, 'wifi-sec.key-mgmt', 'wpa-psk'])
+        const dir = mkdtempSync(join(tmpdir(), 'lcc-wifi-'))
+        try {
+          const pwFile = join(dir, 'psk')
+          writeFileSync(pwFile, `wifi-sec.psk:${password}\n`, { mode: 0o600 })
+          await runFile('nmcli', ['connection', 'up', 'id', conName, 'passwd-file', pwFile])
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+        return { ok: true }
+      }
+      await runFile('nmcli', ['device', 'wifi', 'connect', ssid])
       return { ok: true }
     } catch (e: unknown) {
-      return { ok: false, error: String((e as { stderr?: string }).stderr ?? e) }
+      // The passwd-file path assumes WPA-PSK; anything it can't express
+      // (e.g. WEP) falls back to the plain connect command, which keeps the
+      // old behavior — including the PSK on argv for that one call.
+      try {
+        await runFile('nmcli', ['connection', 'delete', `lcc-${ssid}`]).catch(() => {})
+        const args = ['device', 'wifi', 'connect', ssid]
+        if (password) args.push('password', password)
+        await runFile('nmcli', args)
+        return { ok: true }
+      } catch (e2: unknown) {
+        return { ok: false, error: String((e2 as { stderr?: string }).stderr ?? e2) }
+      }
     }
   })
 
@@ -1261,7 +1309,15 @@ export async function registerIpcHandlers(): Promise<void> {
     return apps.sort((a, b) => a.name.localeCompare(b.name))
   })
 
+  // .desktop ids are derived from a filename with the extension stripped, never a
+  // full path — reject anything that could escape the autostart directory (a
+  // leading '/' making the later template literal an absolute path, or '..'
+  // segments) before it's used to build a filesystem path.
+  const isDesktopId = (id: string): boolean =>
+    typeof id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(id) && !id.includes('..')
+
   ipcMain.handle('startup:toggle', async (_, id: string, enabled: boolean) => {
+    if (!isDesktopId(id)) throw new Error('Invalid app id')
     const home = homedir()
     const userDir = `${home}/.config/autostart`
     await mkdir(userDir, { recursive: true })
@@ -1289,6 +1345,16 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('startup:add', async (_, name: string, exec: string, comment: string) => {
+    // .desktop files are line-oriented INI — an embedded newline in any of
+    // these fields would let the value inject its own key (e.g. a second
+    // Exec= line) rather than just being part of this one's value.
+    const singleLine = (s: string): string => s.replace(/[\r\n]+/g, ' ').trim()
+    name = singleLine(name)
+    exec = singleLine(exec)
+    comment = singleLine(comment || '')
+    if (!name) throw new Error('Name is required')
+    if (!exec) throw new Error('Command is required')
+
     const home = homedir()
     const userDir = `${home}/.config/autostart`
     await mkdir(userDir, { recursive: true })
@@ -1306,6 +1372,7 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   ipcMain.handle('startup:remove', async (_, id: string) => {
+    if (!isDesktopId(id)) throw new Error('Invalid app id')
     const home = homedir()
     const filePath = `${home}/.config/autostart/${id}.desktop`
     await unlink(filePath)
@@ -2738,18 +2805,19 @@ export async function registerIpcHandlers(): Promise<void> {
         // WireGuard via nmcli
         await privilegedOp('vpn-create-wireguard', sanitizedName, sanitizedGateway)
       } else if (config.type === 'openvpn') {
-        // OpenVPN
-        const cmd = ['nmcli', 'connection', 'add',
-          'type', 'vpn',
-          'vpn-type', 'openvpn',
-          'con-name', sanitizedName,
-          'ifname', '*',
-          'vpn.data', `remote=${sanitizedGateway}`
-        ]
-        if (config.username) {
-          cmd.push('vpn.secrets', `username=${config.username}`)
-        }
-        await privilegedOp('vpn-create-openvpn', sanitizedName, sanitizedGateway, config.username || '', config.password || '', config.certFile || '', config.ovpnConfig || '')
+        // Credentials go over stdin, not argv — pkexec logs its full argv to
+        // the system journal, so anything passed as a CLI argument here
+        // would end up in a persistent, readable log.
+        await privilegedOpWithStdin(
+          'vpn-create-openvpn',
+          [sanitizedName, sanitizedGateway],
+          JSON.stringify({
+            username: config.username || '',
+            password: config.password || '',
+            certFile: config.certFile || '',
+            ovpnConfig: config.ovpnConfig || ''
+          })
+        )
       } else {
         throw new Error(`VPN type ${config.type} not yet supported via GUI`)
       }
@@ -2811,17 +2879,22 @@ export async function registerIpcHandlers(): Promise<void> {
   }) => {
     if (!config.name || config.name.length > 64) throw new Error('Invalid connection name')
     if (!config.privateKey || !config.peerPublicKey) throw new Error('Private key and peer public key are required')
+    // WireGuard keys are 44-char base64 ending in '=' — the helper enforces
+    // the same check before writing them into the imported .conf.
+    const wgKey = /^[A-Za-z0-9+/]{43}=$/
+    if (!wgKey.test(config.privateKey)) throw new Error('Invalid private key format')
+    if (!wgKey.test(config.peerPublicKey)) throw new Error('Invalid peer public key format')
 
     const sanitizedName = config.name.replace(/[^a-zA-Z0-9_-]/g, '_')
 
     try {
-      await privilegedOp('vpn-create-wireguard-full',
-        sanitizedName,
-        config.privateKey,
-        config.publicKey,
-        config.peerPublicKey,
-        config.peerEndpoint || '',
-        config.address || '10.200.200.2/24'
+      // Private key goes over stdin, not argv — pkexec logs its full argv to
+      // the system journal, so a private key passed as a CLI argument would
+      // end up in a persistent, readable log.
+      await privilegedOpWithStdin(
+        'vpn-create-wireguard-full',
+        [sanitizedName, config.peerPublicKey, config.peerEndpoint || '', config.address || '10.200.200.2/24'],
+        JSON.stringify({ privateKey: config.privateKey })
       )
       return { ok: true }
     } catch (e) {
@@ -3358,9 +3431,18 @@ export async function registerIpcHandlers(): Promise<void> {
     return out
   })
 
+  // ~/.ssh holds more than key pairs (authorized_keys, known_hosts, config)
+  // and the name regex alone doesn't exclude those — deleting
+  // authorized_keys this way would lock the user out of their own SSH
+  // access. Only remove names that actually look like a private key with a
+  // matching .pub sibling, which the reserved names below can never have.
+  const RESERVED_SSH_FILES = new Set(['authorized_keys', 'known_hosts', 'known_hosts.old', 'config'])
+
   ipcMain.handle('ssh:deleteKey', async (_, name: string) => {
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid key name')
+    if (RESERVED_SSH_FILES.has(name)) throw new Error('Refusing to delete a reserved SSH file')
     const sshDir = `${homedir()}/.ssh`
+    if (!existsSync(`${sshDir}/${name}.pub`)) throw new Error(`No key pair named "${name}" found`)
     await unlink(`${sshDir}/${name}`).catch(() => {})
     await unlink(`${sshDir}/${name}.pub`).catch(() => {})
     return { ok: true }

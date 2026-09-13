@@ -372,10 +372,7 @@
     void load()
     rehydrate()
     loadExcludePrefs()
-    const api = (window as unknown as Window & {
-      electronAPI: { onSecurityProgress: (callback: (output: string) => void) => () => void }
-    }).electronAPI
-    return api.onSecurityProgress((output) => {
+    return window.electronAPI.onSecurityProgress((output) => {
       if (activeStream === 'scan') scanOutput = (scanOutput + output).slice(-4000)
       else if (activeStream === 'audit') auditOutput = (auditOutput + output).slice(-4000)
       else if (activeStream === 'install') installOutput = (installOutput + output).slice(-4000)

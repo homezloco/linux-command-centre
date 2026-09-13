@@ -242,10 +242,7 @@
 
   onMount(() => {
     void load()
-    const api = (window as unknown as Window & {
-      electronAPI: { onUpdatesProgress: (callback: (output: string) => void) => () => void }
-    }).electronAPI
-    return api.onUpdatesProgress((output) => {
+    return window.electronAPI.onUpdatesProgress((output) => {
       upgradeOutput = (upgradeOutput + output).slice(-20000)
       parseProgress(upgradeOutput)
     })

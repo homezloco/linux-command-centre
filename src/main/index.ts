@@ -11,6 +11,20 @@ function iconPath(): string {
     : join(__dirname, '../../build/icon.png')
 }
 
+const EXTERNAL_URL_SCHEMES = new Set(['https:', 'http:', 'mailto:'])
+
+/** Hands a URL to the OS's default handler, but only for schemes that make
+ * sense to open externally — never file:/javascript:/data: etc. */
+function openExternalIfAllowed(url: string): void {
+  try {
+    if (EXTERNAL_URL_SCHEMES.has(new URL(url).protocol)) {
+      shell.openExternal(url)
+    }
+  } catch {
+    // not a parseable URL — ignore
+  }
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1100,
@@ -36,12 +50,24 @@ function createWindow(): BrowserWindow {
   win.on('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    openExternalIfAllowed(url)
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  // The app never needs to navigate its own window away from the renderer
+  // it loaded (dev server URL, or the packaged index.html) — anything else
+  // is handed to the OS's default handler instead of being loaded in-app.
+  const devServerUrl = is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+  win.webContents.on('will-navigate', (event, url) => {
+    const allowed = devServerUrl ? url.startsWith(devServerUrl) : url.startsWith('file://')
+    if (!allowed) {
+      event.preventDefault()
+      openExternalIfAllowed(url)
+    }
+  })
+
+  if (devServerUrl) {
+    win.loadURL(devServerUrl)
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }

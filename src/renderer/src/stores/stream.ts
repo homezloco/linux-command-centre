@@ -1,6 +1,6 @@
 import { writable, type Readable } from 'svelte/store'
 
-const PORT = (window as Window & { electronAPI?: { streamPort: number } }).electronAPI?.streamPort ?? 52341
+const PORT = window.electronAPI?.streamPort ?? 52341
 
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -49,7 +49,12 @@ export function subscribeStream<T>(channel: string, callback: (data: T) => void)
 
   return () => {
     set.delete(fn)
-    if (set.size === 0) listeners.delete(channel)
+    if (set.size === 0) {
+      listeners.delete(channel)
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ unsubscribe: channel }))
+      }
+    }
   }
 }
 

@@ -1,2 +1,4 @@
 #!/bin/bash
 rm -f /usr/share/polkit-1/actions/io.lcc.helper.policy || true
+rm -f /usr/lib/linux-command-centre/lcc-helper.js /usr/lib/linux-command-centre/lcc-helper || true
+rmdir /usr/lib/linux-command-centre 2>/dev/null || true

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Trusted entry point for the Linux Command Centre privileged helper.
+#
+# The polkit action io.lcc.helper.run (see io.lcc.helper.policy) is bound to
+# this exact installed path (/usr/lib/linux-command-centre/lcc-helper), not
+# to /usr/bin/node. That distinction matters: if the policy matched on the
+# node interpreter instead, ANY `pkexec node <anything>` on the system would
+# be auto-authorized by a user who had recently approved an LCC action, and
+# any process could trigger LCC's own polkit prompt for its own arbitrary
+# node script. Binding to this wrapper's path means the policy only ever
+# authorizes this fixed, root-owned script.
+#
+# Installed root:root, mode 0755, by the .deb/.rpm postinst script (see
+# helper/after-install.sh) or the snap's install/post-refresh hooks.
+# Not writable by anyone but root.
+exec /usr/bin/node /usr/lib/linux-command-centre/lcc-helper.js "$@"

@@ -8,7 +8,7 @@
 'use strict'
 
 const { execFileSync, execSync, spawnSync, spawn } = require('child_process')
-const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync } = require('fs')
+const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync, mkdtempSync, rmSync } = require('fs')
 
 const [, , operation, ...args] = process.argv
 
@@ -67,6 +67,28 @@ function runLive(cmd, args, env) {
     child.on('error', (err) => resolve({ code: -1, stdout, error: err }))
     child.on('close', (code) => resolve({ code, stdout }))
   })
+}
+
+// Shared guard for user-delete/user-toggle-sudo. The username regex alone
+// doesn't stop a caller from naming a real system account (e.g. "daemon",
+// "www-data") or the very account that authenticated this pkexec call —
+// both would otherwise pass the regex and reach userdel/usermod/gpasswd.
+// PKEXEC_UID is set by pkexec to the uid of the unprivileged user who
+// invoked it, not something the caller can override from the app side.
+function assertModifiableUser(username) {
+  let uid
+  try {
+    uid = parseInt(execFileSync('id', ['-u', username], { encoding: 'utf8' }).trim(), 10)
+  } catch {
+    throw new Error(`No such user: ${username}`)
+  }
+  if (!Number.isInteger(uid) || uid < 1000 || uid === 65534) {
+    throw new Error('Refusing to modify a system account')
+  }
+  const callerUid = parseInt(process.env.PKEXEC_UID, 10)
+  if (Number.isInteger(callerUid) && uid === callerUid) {
+    throw new Error('Refusing to modify the account that authenticated this action')
+  }
 }
 
 const ops = {
@@ -265,19 +287,34 @@ const ops = {
     console.log(`WireGuard VPN created: ${name}`)
   },
 
-  'vpn-create-openvpn'(name, gateway, username, password, certFile, ovpnConfig) {
+  // name/gateway are non-secret and arrive as argv. Everything that can be a
+  // credential (username, password, certFile, ovpnConfig) arrives as a JSON
+  // object over stdin instead — pkexec logs its full argv to the system
+  // journal, so passing secrets as CLI arguments would leave them in a
+  // persistent, readable log. See privilegedOpWithStdin in privilege.ts.
+  'vpn-create-openvpn'(name, gateway) {
     if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
+    const { username, password, certFile, ovpnConfig } = JSON.parse(readFileSync(0, 'utf8') || '{}')
     if (!gateway && !ovpnConfig) throw new Error('Gateway or config is required')
 
     // If we have an .ovpn config, import it via nmcli
     if (ovpnConfig) {
-      // Write config to temp file
-      const tmpFile = `/tmp/vpn-${name}.ovpn`
-      writeFileSync(tmpFile, ovpnConfig, 'utf8')
-      execFileSync('nmcli', ['connection', 'import', 'type', 'openvpn', 'file', tmpFile], { stdio: 'inherit' })
-      // Rename if needed
-      execFileSync('nmcli', ['connection', 'modify', name, 'connection.id', name], { stdio: 'inherit' })
-      unlinkSync(tmpFile)
+      // Written under a private, root-only directory (mkdtemp under /run)
+      // rather than a predictable /tmp/vpn-<name>.ovpn path — a local
+      // attacker could otherwise pre-create that path as a symlink and have
+      // us (running as root) write the config through it onto an arbitrary
+      // file.
+      const tmpDir = mkdtempSync('/run/lcc-vpn-')
+      // File is named <name>.ovpn because nmcli derives the imported
+      // connection's id from the file basename — importing a generic
+      // "config.ovpn" would create a connection called "config".
+      const tmpFile = `${tmpDir}/${name}.ovpn`
+      try {
+        writeFileSync(tmpFile, ovpnConfig, 'utf8')
+        execFileSync('nmcli', ['connection', 'import', 'type', 'openvpn', 'file', tmpFile], { stdio: 'inherit' })
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true })
+      }
     } else {
       const args = ['connection', 'add',
         'type', 'vpn',
@@ -314,42 +351,101 @@ const ops = {
     console.log(`OpenVPN connection created: ${name}`)
   },
 
-  // _publicKey is our own public key. NetworkManager derives it from the
-  // private key, so it is not part of the connection — it is only shown in the
-  // UI so the user can hand it to the peer. Kept to preserve argument order.
-  'vpn-create-wireguard-full'(name, privateKey, _publicKey, peerPublicKey, peerEndpoint, address) {
+  // name/peerPublicKey/peerEndpoint/address are non-secret and arrive as
+  // argv. privateKey arrives as a JSON object over stdin instead — pkexec
+  // logs its full argv to the system journal, so a private key passed as a
+  // CLI argument would leave it in a persistent, readable log. See
+  // privilegedOpWithStdin in privilege.ts. (Our own public key is not
+  // needed here: NetworkManager derives it from the private key, and it was
+  // only ever shown in the UI for the user to hand to the peer.)
+  //
+  // The key also never reaches nmcli's argv: `connection add` would expose
+  // `wireguard.private-key=...` on the command line, and `connection import`
+  // only supports VPN plugin types (not wireguard). Instead we write the
+  // NetworkManager keyfile directly — this process already runs as root —
+  // and ask NM to reload it.
+  'vpn-create-wireguard-full'(name, peerPublicKey, peerEndpoint, address) {
     if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) throw new Error('Invalid connection name')
-    if (!privateKey) throw new Error('Private key is required')
-    if (!peerPublicKey) throw new Error('Peer public key is required')
-
+    const { privateKey } = JSON.parse(readFileSync(0, 'utf8') || '{}')
     const addr = address || '10.200.200.2/24'
 
-    // Create the WireGuard connection with nmcli
-    execFileSync('nmcli', ['connection', 'add',
-      'type', 'wireguard',
-      'con-name', name,
-      'ifname', name,
-      'wireguard.private-key', privateKey,
-      'ipv4.method', 'manual',
-      'ipv4.addresses', addr
-    ], { stdio: 'inherit' })
+    // These values are written verbatim into a keyfile — strict format
+    // checks keep them single-line and well-formed.
+    const wgKey = /^[A-Za-z0-9+/]{43}=$/
+    if (!wgKey.test(privateKey || '')) throw new Error('Invalid private key')
+    if (!wgKey.test(peerPublicKey || '')) throw new Error('Invalid peer public key')
+    if (peerEndpoint && !/^[a-zA-Z0-9_.[\]-]+:\d{1,5}$/.test(peerEndpoint)) throw new Error('Invalid endpoint')
+    if (!/^[0-9a-fA-F.:]+\/\d{1,3}$/.test(addr)) throw new Error('Invalid address')
 
-    // Add the peer
-    const peerArgs = ['connection', 'modify', name,
-      'wireguard.peer-routes', 'yes',
-      '+wireguard.peers', `public-key=${peerPublicKey}`
+    // `connection add` would refuse to overwrite an existing profile; keep
+    // the same semantics rather than silently clobbering a keyfile.
+    const existing = execFileSync('nmcli', ['-t', '-f', 'NAME', 'connection', 'show'], { encoding: 'utf8' })
+    if (existing.split('\n').includes(name)) throw new Error(`Connection "${name}" already exists`)
+
+    const lines = [
+      '[connection]',
+      `id=${name}`,
+      'type=wireguard',
+      `interface-name=${name}`,
+      '',
+      '[wireguard]',
+      `private-key=${privateKey}`,
+      'peer-routes=true',
+      '',
+      `[wireguard-peer.${peerPublicKey}]`,
+      'allowed-ips=0.0.0.0/0'
     ]
-    if (peerEndpoint) {
-      peerArgs.push(`endpoint=${peerEndpoint}`)
+    if (peerEndpoint) lines.push(`endpoint=${peerEndpoint}`)
+    lines.push('', '[ipv4]', 'method=manual', `address1=${addr}`, '', '[ipv6]', 'method=disabled', '')
+
+    const keyfilePath = `/etc/NetworkManager/system-connections/${name}.nmconnection`
+    writeFileSync(keyfilePath, lines.join('\n'), { mode: 0o600 })
+    try {
+      execFileSync('nmcli', ['connection', 'reload'], { stdio: 'inherit' })
+      // A malformed keyfile is silently skipped on reload — verify NM
+      // actually picked the profile up.
+      execFileSync('nmcli', ['connection', 'show', 'id', name], { stdio: 'pipe' })
+    } catch (e) {
+      rmSync(keyfilePath, { force: true })
+      try { execFileSync('nmcli', ['connection', 'reload'], { stdio: 'inherit' }) } catch { /* best effort */ }
+      throw e
     }
-    peerArgs.push('allowed-ips=0.0.0.0/0')
-    execFileSync('nmcli', peerArgs, { stdio: 'inherit' })
 
     console.log(`WireGuard connection created: ${name}`)
   },
 
   'logs-query'(argsJson) {
     const args = JSON.parse(argsJson)
+    if (!Array.isArray(args)) throw new Error('Invalid arguments')
+
+    // These args are normally assembled entirely in the app's main process
+    // (see logs:query in ipc.ts) from a fixed set of options, never taken
+    // verbatim from the renderer. Whitelisting them here is defense in
+    // depth: it caps what a compromised main process could still do with
+    // this op to read-only journalctl queries — never e.g. --file, which
+    // would point journalctl at an arbitrary log file as root.
+    const FLAG_ONLY = new Set(['--output=json', '--no-pager', '--reverse'])
+    const FLAG_VALIDATORS = {
+      '-n': (v) => /^\d{1,5}$/.test(v),
+      '-p': (v) => /^\d(\.\.\d)?$/.test(v),
+      '--unit': (v) => /^[a-zA-Z0-9@._:-]+$/.test(v),
+      '--since': (v) => typeof v === 'string' && v.length <= 64 && !/[`$\\]/.test(v),
+      '--grep': (v) => typeof v === 'string' && v.length <= 200
+    }
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (FLAG_ONLY.has(arg)) continue
+      const validate = FLAG_VALIDATORS[arg]
+      if (validate) {
+        const value = args[i + 1]
+        if (typeof value !== 'string' || !validate(value)) throw new Error(`Invalid value for ${arg}`)
+        i++
+        continue
+      }
+      throw new Error(`Disallowed journalctl argument: ${arg}`)
+    }
+
     const result = execFileSync('journalctl', args, {
       encoding: 'utf8',
       maxBuffer: 8 * 1024 * 1024,
@@ -492,6 +588,7 @@ const ops = {
   'user-delete'(username) {
     if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
     if (username === 'root') throw new Error('Cannot delete root')
+    assertModifiableUser(username)
     execFileSync('userdel', ['-r', username])
     console.log(`User deleted: ${username}`)
   },
@@ -499,6 +596,7 @@ const ops = {
   'user-toggle-sudo'(username, action) {
     if (!/^[a-z_][a-z0-9_-]{0,30}$/.test(username)) throw new Error('Invalid username')
     if (!['add', 'remove'].includes(action)) throw new Error('Action must be add or remove')
+    assertModifiableUser(username)
     if (action === 'add') {
       execFileSync('usermod', ['-aG', 'sudo', username])
     } else {
