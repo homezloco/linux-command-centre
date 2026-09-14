@@ -2,13 +2,15 @@
 
 ## Linux Command Centre
 
-A desktop system-management dashboard built with **Electron 33 + Svelte 5 + TypeScript**, packaged with **electron-builder** and **snapcraft**.
+A desktop system-management dashboard built with **Electron 44 + Svelte 5 + TypeScript**, packaged with **electron-builder** and **snapcraft**.
 
 ## Common commands
 
 ```bash
 # Install dependencies
 npm install
+# Electron 44+ does not auto-download the binary on install — run once after install:
+npx install-electron
 
 # Dev server with hot reload
 npm run dev
