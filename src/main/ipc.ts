@@ -1946,15 +1946,47 @@ export async function registerIpcHandlers(): Promise<void> {
     suggestions: string[]
     suggestionsCount: number
   }
-  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null }
+  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null; finishedAt: string | null }
 
   // Tracked at module scope (not per-invoke-call) so a renderer that remounts
   // mid-operation — a tab switch, an HMR reload, anything that recreates the
   // Svelte component — can ask "what's actually happening" instead of
   // assuming nothing is, and losing track of a scan/audit that's still
   // running as a real child process regardless of what the UI believes.
-  const clamavScanState: OpState<ScanResult> = { running: false, output: '', result: null, error: null }
-  const lynisAuditState: OpState<LynisAuditResult> = { running: false, output: '', result: null, error: null }
+  const clamavScanState: OpState<ScanResult> = { running: false, output: '', result: null, error: null, finishedAt: null }
+  const lynisAuditState: OpState<LynisAuditResult> = { running: false, output: '', result: null, error: null, finishedAt: null }
+
+  // Completed results also land on disk — a full-home scan takes hours, so
+  // losing the outcome to an app restart is a real loss, not a nit. Loaded
+  // back into state below; the panel reads it through the status channels.
+  const SECURITY_HISTORY_FILE = join(app.getPath('userData'), 'security-history.json')
+
+  async function persistOpResult(key: 'clamav' | 'lynis', state: OpState<unknown>): Promise<void> {
+    try {
+      let history: Record<string, unknown> = {}
+      try { history = JSON.parse(await readFile(SECURITY_HISTORY_FILE, 'utf8')) } catch { /* first run */ }
+      history[key] = { result: state.result, output: state.output, finishedAt: state.finishedAt }
+      await writeFile(SECURITY_HISTORY_FILE, JSON.stringify(history))
+    } catch { /* history persistence is best-effort */ }
+  }
+
+  try {
+    const history = JSON.parse(await readFile(SECURITY_HISTORY_FILE, 'utf8'))
+    if (history?.clamav?.result) {
+      Object.assign(clamavScanState, {
+        result: history.clamav.result,
+        output: history.clamav.output ?? '',
+        finishedAt: history.clamav.finishedAt ?? null
+      })
+    }
+    if (history?.lynis?.result) {
+      Object.assign(lynisAuditState, {
+        result: history.lynis.result,
+        output: history.lynis.output ?? '',
+        finishedAt: history.lynis.finishedAt ?? null
+      })
+    }
+  } catch { /* no history yet */ }
 
   function parseLynisOutput(output: string): LynisAuditResult {
     const hardeningMatch = output.match(/Hardening index\s*:\s*(\d+)/)
@@ -2029,6 +2061,7 @@ export async function registerIpcHandlers(): Promise<void> {
     clamavScanState.output = ''
     clamavScanState.result = null
     clamavScanState.error = null
+    clamavScanState.finishedAt = null
 
     const broadcast = (s: string): void => {
       clamavScanState.output = (clamavScanState.output + s).slice(-4000)
@@ -2060,6 +2093,8 @@ export async function registerIpcHandlers(): Promise<void> {
         })
       })
       clamavScanState.result = result
+      clamavScanState.finishedAt = new Date().toISOString()
+      void persistOpResult('clamav', clamavScanState)
       return result
     } catch (e) {
       clamavScanState.error = e instanceof Error ? e.message : String(e)
@@ -2076,6 +2111,7 @@ export async function registerIpcHandlers(): Promise<void> {
     lynisAuditState.output = ''
     lynisAuditState.result = null
     lynisAuditState.error = null
+    lynisAuditState.finishedAt = null
 
     try {
       const output = await privilegedOpStreaming('lynis-audit', [], (out) => {
@@ -2084,6 +2120,8 @@ export async function registerIpcHandlers(): Promise<void> {
       })
       const result = parseLynisOutput(output)
       lynisAuditState.result = result
+      lynisAuditState.finishedAt = new Date().toISOString()
+      void persistOpResult('lynis', lynisAuditState)
       return result
     } catch (e) {
       lynisAuditState.error = e instanceof Error ? e.message : String(e)

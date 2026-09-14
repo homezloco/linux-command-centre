@@ -207,6 +207,8 @@
   let auditing = $state(false)
   let auditOutput = $state('')
   let lynisResult = $state<LynisResult | null>(null)
+  let scanFinishedAt = $state<string | null>(null)
+  let auditFinishedAt = $state<string | null>(null)
 
   let installOutput = $state('')
 
@@ -321,6 +323,7 @@
     activeStream = 'scan'
     try {
       scanResult = await invoke<ScanResult>('security:clamav-scan', computeExcludeFragments())
+      scanFinishedAt = new Date().toISOString()
     } catch (e) {
       error = String(e)
     } finally {
@@ -336,6 +339,7 @@
     activeStream = 'audit'
     try {
       lynisResult = await invoke<LynisResult>('security:lynis-audit')
+      auditFinishedAt = new Date().toISOString()
     } catch (e) {
       error = String(e)
     } finally {
@@ -344,7 +348,7 @@
     }
   }
 
-  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null }
+  type OpState<T> = { running: boolean; output: string; result: T | null; error: string | null; finishedAt: string | null }
 
   // A scan/audit is a real child process in the main process, independent of
   // whatever Svelte component happens to be watching it — switching tabs (or,
@@ -373,6 +377,7 @@
         if (activeStream === 'scan') activeStream = null
         if (s.result) scanResult = s.result
         else if (s.error) error = s.error
+        if (s.finishedAt) scanFinishedAt = s.finishedAt
       }
     }).catch(() => {})
 
@@ -386,6 +391,7 @@
         if (activeStream === 'audit') activeStream = null
         if (s.result) lynisResult = s.result
         else if (s.error) error = s.error
+        if (s.finishedAt) auditFinishedAt = s.finishedAt
       }
     }).catch(() => {})
   }
@@ -876,7 +882,7 @@
               {#if scanning}
                 Scanning home directory…
               {:else if scanResult}
-                {scanResult.infected > 0 ? `${scanResult.infected} infected file(s) found` : `Clean · ${scanResult.scanned} files scanned`}
+                {scanResult.infected > 0 ? `${scanResult.infected} infected file(s) found` : `Clean · ${scanResult.scanned.toLocaleString()} files scanned`}{scanFinishedAt ? ` · ${new Date(scanFinishedAt).toLocaleDateString()}` : ''}
               {:else if status.clamav?.installed}
                 {status.clamav.lastDbUpdate ? `Definitions updated ${new Date(status.clamav.lastDbUpdate).toLocaleDateString()}` : 'Definitions not yet downloaded'}
               {:else}
@@ -1008,9 +1014,9 @@
               {#if auditing}
                 Running audit…
               {:else if lynisResult}
-                Hardening index {lynisResult.hardeningIndex ?? '—'}/100 · {lynisResult.warningsCount} warning{lynisResult.warningsCount === 1 ? '' : 's'}
+                Hardening index {lynisResult.hardeningIndex ?? '—'}/100 · {lynisResult.warningsCount} warning{lynisResult.warningsCount === 1 ? '' : 's'}{auditFinishedAt ? ` · ${new Date(auditFinishedAt).toLocaleDateString()}` : ''}
               {:else if status.lynis?.installed}
-                Not yet run this session
+                Not yet run
               {:else}
                 Not installed
               {/if}
