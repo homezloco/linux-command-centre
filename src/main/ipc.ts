@@ -2015,7 +2015,15 @@ export async function registerIpcHandlers(): Promise<void> {
     const fragments = (Array.isArray(excludeFragments) ? excludeFragments : [])
       .filter((f): f is string => typeof f === 'string' && f.trim().length > 0 && f.length <= 200)
       .slice(0, 30)
-    const excludeArgs = fragments.map((f) => `--exclude-dir=(^|/)${escapeRegex(f.trim())}($|/)`)
+    // A trailing * means "any directory segment starting with this prefix"
+    // (e.g. cuttlefish* covers cuttlefish-images, cuttlefish_runtime.1, …);
+    // otherwise the fragment must match a whole path segment exactly.
+    const excludeArgs = fragments.map((f) => {
+      const t = f.trim()
+      return t.endsWith('*')
+        ? `--exclude-dir=(^|/)${escapeRegex(t.slice(0, -1))}`
+        : `--exclude-dir=(^|/)${escapeRegex(t)}($|/)`
+    })
 
     clamavScanState.running = true
     clamavScanState.output = ''

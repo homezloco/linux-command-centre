@@ -124,23 +124,45 @@
     { id: 'node_modules', label: 'node_modules', fragments: ['node_modules'] },
     { id: 'cache', label: '.cache directories', fragments: ['.cache'] },
     { id: 'git', label: '.git directories', fragments: ['.git'] },
-    { id: 'venv', label: 'Python virtualenvs', fragments: ['venv', '.venv'] }
+    { id: 'venv', label: 'Python virtualenvs', fragments: ['venv', '.venv'] },
+    // `*` suffix = prefix match on the directory name (see ipc.ts), so
+    // 'cuttlefish*' covers cuttlefish, cuttlefish-images,
+    // cuttlefish_runtime.1, etc.
+    { id: 'android', label: 'Android SDK & emulator images', fragments: ['Android', '.android', 'android-studio', 'cuttlefish*'] },
+    { id: 'sdkcaches', label: 'Tool caches (.npm, .gradle, …)', fragments: ['.npm', '.gradle', '.m2', '.nvm', '.rustup', '.cargo', 'flutter'] },
+    { id: 'dreamos', label: 'dreamos', fragments: ['dreamos'] }
   ]
   const EXCLUDE_STORAGE_KEY = 'lcc-clamav-excludes'
   const CUSTOM_EXCLUDE_STORAGE_KEY = 'lcc-clamav-custom-excludes'
-  const DEFAULT_EXCLUDES = ['node_modules', 'cache']
+  const SEEN_STORAGE_KEY = 'lcc-clamav-excludes-seen'
+  const DEFAULT_EXCLUDES = ['node_modules', 'cache', 'android', 'sdkcaches', 'dreamos']
 
   let excludeChecked = $state<Set<string>>(new Set(DEFAULT_EXCLUDES))
   let customExcludes = $state<string[]>([])
   let customExcludeInput = $state('')
 
   function loadExcludePrefs(): void {
+    // Options added after the user first saved prefs should still default
+    // to checked — `seen` records every option id ever shipped, so a new
+    // default is checked once but an explicit uncheck still sticks.
+    let seen = new Set<string>()
+    try {
+      const raw = localStorage.getItem(SEEN_STORAGE_KEY)
+      seen = new Set(raw ? JSON.parse(raw) : [])
+    } catch { /* non-critical */ }
     try {
       const raw = localStorage.getItem(EXCLUDE_STORAGE_KEY)
-      excludeChecked = new Set(raw ? JSON.parse(raw) : DEFAULT_EXCLUDES)
+      const stored: string[] = raw ? JSON.parse(raw) : DEFAULT_EXCLUDES
+      const merged = new Set(stored)
+      for (const id of DEFAULT_EXCLUDES) if (!seen.has(id)) merged.add(id)
+      excludeChecked = merged
     } catch {
       excludeChecked = new Set(DEFAULT_EXCLUDES)
     }
+    for (const o of EXCLUDE_OPTIONS) seen.add(o.id)
+    try {
+      localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify([...seen]))
+    } catch { /* non-critical */ }
     try {
       const raw = localStorage.getItem(CUSTOM_EXCLUDE_STORAGE_KEY)
       customExcludes = raw ? JSON.parse(raw) : []
@@ -941,7 +963,7 @@
                   bind:value={customExcludeInput}
                   onkeydown={(e) => e.key === 'Enter' && addCustomExclude()}
                   disabled={scanning}
-                  placeholder="Add a folder name to skip…"
+                  placeholder="Folder name to skip (trailing * = prefix)…"
                   class="flex-1 text-xs px-2 py-1 rounded-md border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
                 />
                 <button
