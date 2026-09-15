@@ -318,3 +318,9 @@ select:focus {
 html[data-reduce-effects] { --bg-image: none !important; }
 html[data-reduce-effects] .bg-card,
 html[data-reduce-effects] .bg-primary { box-shadow: none !important; }
+
+button.pressable:not(:disabled):active { transform: scale(0.97); }
+
+@media (prefers-reduced-motion: reduce) {
+  button.pressable:not(:disabled):active { transform: none; }
+}

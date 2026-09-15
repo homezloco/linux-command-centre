@@ -11,6 +11,8 @@
     "baseUrl": ".",
     "paths": {
       "$lib/*": ["src/renderer/src/lib/*"],
+      "$ui": ["src/renderer/src/components/ui/index.ts"],
+      "$ui/*": ["src/renderer/src/components/ui/*"],
       "$stores/*": ["src/renderer/src/stores/*"],
       "$modules/*": ["src/renderer/src/modules/*"]
     }
