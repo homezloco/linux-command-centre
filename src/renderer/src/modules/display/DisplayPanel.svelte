@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { invoke } from '$lib/utils'
-  import { Sun, Moon, Monitor, ChevronDown, Maximize, Star } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { invoke, debounce } from '$lib/utils'
+  import { toasts } from '$stores/toasts'
+  import { Page, Card, Skeleton, Button, Toggle, Listbox, SegmentedControl, EmptyState } from '$ui'
+  import { Sun, Moon, Monitor, Maximize, RefreshCw } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type DisplayMode = {
     resolution: string
@@ -12,7 +13,7 @@
     isPreferred: boolean
   }
 
-  type Monitor = {
+  type MonitorInfo = {
     name: string
     resolution: string
     refreshRate: number
@@ -24,62 +25,81 @@
     brightness: number | null
     nightLight: boolean
     nightLightTemp: number
-    monitors: Monitor[]
+    monitors: MonitorInfo[]
     fractionalScale: number
   }
 
+  const TITLE = 'Display'
+  const SCALES = [1, 1.25, 1.5, 1.75, 2]
+  const SCALE_OPTIONS = SCALES.map(s => ({ value: s.toFixed(2), label: `${s.toFixed(2)}×` }))
+
   let status = $state<DisplayStatus | null>(null)
   let loading = $state(true)
+  let refreshing = $state(false)
   let error = $state('')
+  let applying = $state<string | null>(null)
 
-  // Monitor config state
+  // Monitor mode drafts (resolution + rate is a two-field change → explicit Apply per monitor)
   let selectedResolutions = $state<Record<string, string>>({})
   let selectedRates = $state<Record<string, number>>({})
 
-  async function load() {
-    loading = true; error = ''
+  async function load(force = false) {
+    if (force) refreshing = true
+    error = ''
     try {
       status = await invoke<DisplayStatus>('display:status')
       selectedResolutions = {}
       selectedRates = {}
     } catch (e) { error = String(e) }
-    finally { loading = false }
+    finally { loading = false; refreshing = false }
   }
 
-  async function setBrightness(v: number) {
+  function fail(e: unknown) {
+    toasts.error(String(e), TITLE)
+    void load(true)
+  }
+
+  const pushBrightness = debounce((v: number) => {
+    invoke('display:setBrightness', v).catch(fail)
+  })
+  function setBrightness(v: number) {
     if (!status) return
     status = { ...status, brightness: v }
-    try { await invoke('display:setBrightness', v) }
-    catch (e) { error = String(e) }
+    pushBrightness(v)
   }
 
-  async function toggleNightLight() {
+  async function setNightLight(on: boolean) {
     if (!status) return
-    const next = !status.nightLight
-    status = { ...status, nightLight: next }
-    try { await invoke('display:setNightLight', next) }
-    catch (e) { error = String(e); await load() }
+    status = { ...status, nightLight: on }
+    try { await invoke('display:setNightLight', on) }
+    catch (e) { fail(e) }
   }
 
-  async function setNightLightTemp(v: number) {
+  const pushNightLightTemp = debounce((v: number) => {
+    invoke('display:setNightLightTemp', v).catch(fail)
+  })
+  function setNightLightTemp(v: number) {
     if (!status) return
     status = { ...status, nightLightTemp: v }
-    try { await invoke('display:setNightLightTemp', v) }
-    catch (e) { error = String(e) }
+    pushNightLightTemp(v)
   }
 
-  async function setResolution(monitor: string, resolution: string, rate?: number) {
+  async function applyMode(monitor: string, resolution: string, rate?: number) {
+    applying = monitor
     try {
       await invoke('display:setResolution', monitor, resolution, rate)
-      await load()
-    } catch (e) { error = String(e) }
+      toasts.success(`${monitor} set to ${resolution}${rate ? ` @ ${rate.toFixed(1)} Hz` : ''}`, TITLE)
+      await load(true)
+    } catch (e) { toasts.error(String(e), TITLE) }
+    finally { applying = null }
   }
 
-  async function setScale(scale: number) {
-    try {
-      await invoke('display:setScale', scale)
-      if (status) status = { ...status, fractionalScale: scale }
-    } catch (e) { error = String(e) }
+  async function setScale(value: string) {
+    const scale = parseFloat(value)
+    if (!status || !Number.isFinite(scale)) return
+    status = { ...status, fractionalScale: scale }
+    try { await invoke('display:setScale', scale) }
+    catch (e) { fail(e) }
   }
 
   function getUniqueResolutions(modes: DisplayMode[]) {
@@ -92,168 +112,177 @@
   }
 
   function getRatesForResolution(modes: DisplayMode[], resolution: string) {
-    return modes.filter(m => m.resolution === resolution).map(m => m.refreshRate)
+    return [...new Set(modes.filter(m => m.resolution === resolution).map(m => m.refreshRate))]
   }
 
-  onMount(load)
+  onMount(() => { void load() })
 </script>
 
-{#if loading}
-  <Spinner />
-{:else if error && !status}
-  <Alert message={error} />
-{:else if status}
-<div class="max-w-lg space-y-3">
+<Page width="narrow">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh display status"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-    <!-- Monitors -->
-    {#if status.monitors.length === 0}
-      <div class="rounded-xl border border-border bg-card p-8 text-center space-y-2">
-        <Monitor size={32} class="mx-auto text-muted-foreground/40" />
-        <p class="text-sm text-muted-foreground">No displays detected</p>
-        <p class="text-xs text-muted-foreground/60">Plug in a monitor or check your graphics drivers.</p>
-      </div>
-    {:else}
-      <div class="space-y-2">
-        {#each status.monitors as monitor}
-          {@const selectedRes = selectedResolutions[monitor.name] || monitor.resolution}
-          {@const availableRates = getRatesForResolution(monitor.modes, selectedRes)}
-          {@const selectedRate = selectedRates[monitor.name] || availableRates[0] || monitor.refreshRate}
-          <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2.5">
-                <div class="w-7 h-7 rounded-md bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
-                  <Monitor size={14} />
+  <div class="space-y-3">
+    {#if error}
+      <Alert message={error} />
+    {/if}
+
+    {#if loading}
+      <Skeleton class="h-32 w-full" />
+      <Skeleton class="h-24 w-full" />
+      <Skeleton class="h-28 w-full" />
+      <Skeleton class="h-20 w-full" />
+
+    {:else if status}
+      <!-- Monitors -->
+      {#if status.monitors.length === 0}
+        <EmptyState icon={Monitor} title="No displays detected" message="Plug in a monitor or check your graphics drivers." />
+      {:else}
+        <div class="space-y-2">
+          {#each status.monitors as monitor (monitor.name)}
+            {@const selectedRes = selectedResolutions[monitor.name] || monitor.resolution}
+            {@const availableRates = getRatesForResolution(monitor.modes, selectedRes)}
+            {@const selectedRate = selectedRates[monitor.name] ?? (availableRates.includes(monitor.refreshRate) ? monitor.refreshRate : availableRates[0])}
+            {@const resOptions = getUniqueResolutions(monitor.modes).map(m => ({ value: m.resolution, label: `${m.resolution}${m.isPreferred ? ' ★' : ''}` }))}
+            {@const rateOptions = availableRates.map(r => ({ value: String(r), label: `${r.toFixed(1)} Hz` }))}
+            {@const unchanged = selectedRes === monitor.resolution && selectedRate === monitor.refreshRate}
+            <Card class="space-y-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <div class="w-7 h-7 rounded-md bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
+                    <Monitor size={14} />
+                  </div>
+                  <span class="text-[13px] font-medium truncate">{monitor.name}</span>
+                  {#if monitor.primary}
+                    <span class="text-[11px] px-1.5 py-0.5 rounded bg-primary/20 text-primary shrink-0">Primary</span>
+                  {/if}
                 </div>
-                <span class="text-sm font-medium">{monitor.name}</span>
-                {#if monitor.primary}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">Primary</span>
-                {/if}
-              </div>
-              <button
-                onclick={() => setResolution(monitor.name, selectedRes, selectedRate)}
-                disabled={selectedRes === monitor.resolution && selectedRate === monitor.refreshRate}
-                class="text-xs px-2 py-1 rounded bg-primary text-primary-foreground disabled:opacity-50"
-              >
-                Apply
-              </button>
-            </div>
-
-            <div class="grid grid-cols-2 gap-3">
-              <!-- Resolution -->
-              <div class="space-y-1">
-                <label for="res-{monitor.name}" class="text-xs text-muted-foreground">Resolution</label>
-                <select
-                  id="res-{monitor.name}"
-                  value={selectedRes}
-                  onchange={(e) => selectedResolutions = { ...selectedResolutions, [monitor.name]: (e.target as HTMLSelectElement).value }}
-                  class="w-full text-sm rounded-md border border-border bg-secondary/50 px-2 py-1.5"
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={applying === monitor.name}
+                  disabled={unchanged}
+                  onclick={() => applyMode(monitor.name, selectedRes, selectedRate)}
                 >
-                  {#each getUniqueResolutions(monitor.modes) as mode}
-                    <option value={mode.resolution}>
-                      {mode.resolution} {mode.isPreferred ? '★' : ''}
-                    </option>
-                  {/each}
-                </select>
+                  Apply
+                </Button>
               </div>
 
-              <!-- Refresh Rate -->
-              <div class="space-y-1">
-                <label for="rate-{monitor.name}" class="text-xs text-muted-foreground">Refresh Rate</label>
-                <select
-                  id="rate-{monitor.name}"
-                  value={selectedRate}
-                  onchange={(e) => selectedRates = { ...selectedRates, [monitor.name]: parseFloat((e.target as HTMLSelectElement).value) }}
-                  class="w-full text-sm rounded-md border border-border bg-secondary/50 px-2 py-1.5"
-                >
-                  {#each availableRates as rate}
-                    <option value={rate}>{rate.toFixed(1)} Hz</option>
-                  {/each}
-                </select>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <label for="res-{monitor.name}" class="text-xs text-muted-foreground">Resolution</label>
+                  <Listbox
+                    id="res-{monitor.name}"
+                    value={selectedRes}
+                    options={resOptions}
+                    onChange={(v) => {
+                      selectedResolutions = { ...selectedResolutions, [monitor.name]: v }
+                      // A new resolution has its own rate list — drop the stale draft rate
+                      const rest = { ...selectedRates }
+                      delete rest[monitor.name]
+                      selectedRates = rest
+                    }}
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label for="rate-{monitor.name}" class="text-xs text-muted-foreground">Refresh rate</label>
+                  <Listbox
+                    id="rate-{monitor.name}"
+                    value={String(selectedRate)}
+                    options={rateOptions}
+                    onChange={(v) => { selectedRates = { ...selectedRates, [monitor.name]: parseFloat(v) } }}
+                  />
+                </div>
               </div>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Scaling -->
-    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2.5 text-sm font-medium">
-          <div class="w-7 h-7 rounded-md bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0">
-            <Maximize size={13} />
-          </div>
-          Scaling
+            </Card>
+          {/each}
         </div>
-        <span class="text-xs text-muted-foreground">{status.fractionalScale.toFixed(1)}x</span>
-      </div>
-      <div class="flex gap-2 flex-wrap">
-        {#each [1, 1.25, 1.5, 1.75, 2] as scale}
-          <button
-            onclick={() => setScale(scale)}
-            class="px-3 py-1.5 rounded-md text-xs border transition-colors
-                   {status.fractionalScale === scale
-                     ? 'border-primary bg-primary/10 text-primary'
-                     : 'border-border hover:bg-secondary'}"
-          >
-            {scale.toFixed(2)}x
-          </button>
-        {/each}
-      </div>
-    </div>
-
-    <!-- Brightness -->
-    {#if status.brightness !== null}
-    <div class="rounded-xl border border-border bg-card p-5 space-y-3">
-      <div class="flex items-center gap-2.5 text-sm font-medium">
-        <div class="w-7 h-7 rounded-md bg-yellow-500/10 text-yellow-400 flex items-center justify-center shrink-0">
-          <Sun size={13} />
-        </div>
-        Brightness — {status.brightness}%
-      </div>
-      <input type="range" min="1" max="100" step="1" value={status.brightness}
-             oninput={(e) => setBrightness(parseInt((e.target as HTMLInputElement).value))}
-             class="w-full accent-primary" />
-      <div class="flex justify-between">
-        {#each [25, 50, 75, 100] as p}
-          <button onclick={() => setBrightness(p)} class="text-xs text-muted-foreground hover:text-foreground transition-colors">{p}%</button>
-        {/each}
-      </div>
-    </div>
-    {/if}
-
-    <!-- Night Light -->
-    <div class="rounded-xl border border-border bg-card p-5 space-y-4">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2.5 text-sm font-medium">
-          <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0">
-            <Moon size={13} />
-          </div>
-          Night light
-        </div>
-        <button onclick={toggleNightLight} aria-label="Toggle night light"
-                class="relative w-11 h-6 rounded-full transition-colors {status.nightLight ? 'bg-primary' : 'bg-secondary'}">
-          <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {status.nightLight ? 'translate-x-5' : ''}"></span>
-        </button>
-      </div>
-
-      {#if status.nightLight}
-      <div class="space-y-1.5">
-        <div class="flex justify-between text-xs text-muted-foreground">
-          <span>Temperature</span>
-          <span>{status.nightLightTemp}K</span>
-        </div>
-        <input type="range" min="1700" max="4700" step="100" value={status.nightLightTemp}
-               oninput={(e) => setNightLightTemp(parseInt((e.target as HTMLInputElement).value))}
-               class="w-full accent-primary" />
-        <div class="flex justify-between text-xs text-muted-foreground">
-          <span>Warm</span>
-          <span>Cool</span>
-        </div>
-      </div>
       {/if}
-    </div>
 
-    {#if error}<Alert message={error} />{/if}
-</div>
-{/if}
+      <!-- Scaling -->
+      <Card class="space-y-3">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2.5 text-[13px] font-medium">
+            <div class="w-7 h-7 rounded-md bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0">
+              <Maximize size={13} />
+            </div>
+            Scaling
+          </div>
+          <span class="text-xs text-muted-foreground tabular-nums">{status.fractionalScale.toFixed(2)}×</span>
+        </div>
+        <SegmentedControl
+          value={status.fractionalScale.toFixed(2)}
+          options={SCALE_OPTIONS}
+          ariaLabel="Display scaling"
+          onChange={(v) => setScale(v)}
+        />
+      </Card>
+
+      <!-- Brightness -->
+      {#if status.brightness !== null}
+        <Card class="p-5 space-y-3">
+          <label for="display-brightness" class="flex items-center gap-2.5 text-[13px] font-medium">
+            <div class="w-7 h-7 rounded-md bg-yellow-500/10 text-yellow-400 flex items-center justify-center shrink-0">
+              <Sun size={13} />
+            </div>
+            Brightness — <span class="tabular-nums">{status.brightness}%</span>
+          </label>
+          <input
+            id="display-brightness"
+            type="range" min="1" max="100" step="1"
+            value={status.brightness}
+            oninput={(e) => setBrightness(parseInt((e.target as HTMLInputElement).value))}
+            class="w-full accent-primary"
+          />
+          <div class="flex justify-between">
+            {#each [25, 50, 75, 100] as p (p)}
+              <Button variant="ghost" size="sm" class="text-xs text-muted-foreground px-1.5" onclick={() => setBrightness(p)}>{p}%</Button>
+            {/each}
+          </div>
+        </Card>
+      {/if}
+
+      <!-- Night light -->
+      <Card class="p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2.5 text-[13px] font-medium" id="night-light-label">
+            <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0">
+              <Moon size={13} />
+            </div>
+            Night light
+          </div>
+          <Toggle checked={status.nightLight} aria-labelledby="night-light-label" onCheckedChange={(v) => setNightLight(v)} />
+        </div>
+
+        {#if status.nightLight}
+          <div class="space-y-1.5">
+            <div class="flex justify-between text-xs text-muted-foreground">
+              <label for="night-light-temp">Temperature</label>
+              <span class="tabular-nums">{status.nightLightTemp}K</span>
+            </div>
+            <input
+              id="night-light-temp"
+              type="range" min="1700" max="4700" step="100"
+              value={status.nightLightTemp}
+              oninput={(e) => setNightLightTemp(parseInt((e.target as HTMLInputElement).value))}
+              class="w-full accent-primary"
+            />
+            <div class="flex justify-between text-xs text-muted-foreground">
+              <span>Warm</span>
+              <span>Cool</span>
+            </div>
+          </div>
+        {/if}
+      </Card>
+    {/if}
+  </div>
+</Page>
