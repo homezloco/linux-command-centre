@@ -7,7 +7,7 @@
            Lock, Clock, MousePointer, Paintbrush, Users, Wrench,
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
-           Globe2, FolderOpen, Gauge, Layers, Timer, Laptop, Pin,
+           Globe2, FolderOpen, Gauge, Layers, Timer, Home, Pin,
            ChevronDown, ChevronRight } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
@@ -49,7 +49,7 @@
   import SmartPanel       from './modules/smart/SmartPanel.svelte'
   import GrubPanel        from './modules/grub/GrubPanel.svelte'
   import TimersPanel      from './modules/timers/TimersPanel.svelte'
-  import DevicePanel      from './modules/device/DevicePanel.svelte'
+  import HomePanel        from './modules/home/HomePanel.svelte'
   import CommandPalette   from '$lib/CommandPalette.svelte'
   import Toaster          from '$lib/Toaster.svelte'
   import { SearchField } from '$ui'
@@ -57,6 +57,7 @@
   import { toasts }        from '$stores/toasts'
   import { appName, DEFAULT_APP_NAME } from '$stores/appName'
   import { openPalette } from '$stores/palette'
+  import { badges, startBadgePolling, stopBadgePolling } from '$stores/badges'
   import {
     active, collapsed, pins, recents,
     initNav, setActive, toggleCollapsed, togglePin, navCache,
@@ -78,6 +79,7 @@
     {
       label: 'Overview',
       items: [
+        { id: 'home',      label: 'Home',        icon: Home,     component: HomePanel as PanelComponent,      keywords: ['hostname', 'health', 'overview', 'device'] },
         { id: 'system',    label: 'System info', icon: Server,   component: SystemPanel as PanelComponent,    keywords: ['specs', 'sysctl', 'lscpu', 'dmidecode'] },
         { id: 'processes', label: 'Processes',   icon: Activity, component: ProcessesPanel as PanelComponent, keywords: ['htop', 'top', 'ps', 'kill'] },
       ]
@@ -111,7 +113,6 @@
         { id: 'smart',     label: 'Disk Health', icon: Gauge,       component: SmartPanel as PanelComponent },
         { id: 'printers',  label: 'Printers',    icon: Printer,     component: PrintersPanel as PanelComponent },
         { id: 'camera',    label: 'Camera',      icon: Camera,      component: CameraPanel as PanelComponent },
-        { id: 'device',    label: 'Device',      icon: Laptop,      component: DevicePanel as PanelComponent },
       ]
     },
     {
@@ -220,20 +221,12 @@
   let appVersion = $state('0.1.0')
   let appOs      = $state('Linux')
 
-  // ── Sidebar badges ────────────────────────────────────────────────────────
-  type Badges = { pendingUpdates: number; securityUpdates: number; highDisk: boolean; vpnActive: boolean }
-  let badges = $state<Badges>({ pendingUpdates: 0, securityUpdates: 0, highDisk: false, vpnActive: false })
-  let badgeInterval: ReturnType<typeof setInterval> | undefined
-
-  async function refreshBadges() {
-    try { badges = await invoke<Badges>('badge:counts') } catch { /* non-critical */ }
-  }
-
+  // ── Sidebar badges (store owns the 5-minute poll; Home subscribes too) ────
   function badgeFor(id: string): string | null {
-    if (id === 'updates'  && badges.pendingUpdates > 0)  return String(badges.pendingUpdates)
-    if (id === 'security' && badges.securityUpdates > 0) return String(badges.securityUpdates)
-    if (id === 'storage'  && badges.highDisk)            return '!'
-    if (id === 'vpn'      && badges.vpnActive)           return '●'
+    if (id === 'updates'  && $badges.pendingUpdates > 0)  return String($badges.pendingUpdates)
+    if (id === 'security' && $badges.securityUpdates > 0) return String($badges.securityUpdates)
+    if (id === 'storage'  && $badges.highDisk)            return '!'
+    if (id === 'vpn'      && $badges.vpnActive)           return '●'
     return null
   }
 
@@ -254,12 +247,11 @@
       } catch { /* defaults */ }
     })()
 
-    refreshBadges()
-    badgeInterval = setInterval(refreshBadges, 5 * 60 * 1000)
+    startBadgePolling()
 
     return () => {
       overlay?.removeEventListener('geometrychange', syncWco)
-      clearInterval(badgeInterval)
+      stopBadgePolling()
     }
   })
 </script>

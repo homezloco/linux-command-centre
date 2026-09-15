@@ -10,7 +10,7 @@ export type NavPrefs = {
 const STORAGE_KEY = 'lcc-nav'
 const PIN_MAX = 6
 const RECENT_MAX = 5
-const DEFAULT_LAST = 'system'
+const DEFAULT_LAST = 'home'
 
 const DEFAULTS: NavPrefs = {
   last: DEFAULT_LAST,
