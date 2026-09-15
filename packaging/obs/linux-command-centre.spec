@@ -57,6 +57,13 @@ install -Dm644 %{SOURCE1} %{buildroot}%{_datadir}/applications/linux-command-cen
 install -Dm644 %{SOURCE2} %{buildroot}%{_datadir}/polkit-1/actions/io.lcc.helper.policy
 install -Dm644 %{SOURCE3} %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/linux-command-centre.png
 
+# The polkit action is bound to the wrapper's exact path (literal /usr/lib,
+# not %%{_libdir} — this is an app dir, not an arch libdir). The tarball
+# ships both files under resources/helper/ via extraResources.
+install -d %{buildroot}/usr/lib/linux-command-centre
+install -m644 %{buildroot}%{appdir}/resources/helper/lcc-helper.js %{buildroot}/usr/lib/linux-command-centre/lcc-helper.js
+install -m755 %{buildroot}%{appdir}/resources/helper/lcc-helper %{buildroot}/usr/lib/linux-command-centre/lcc-helper
+
 %files
 %{appdir}/
 %attr(4755,root,root) %{appdir}/chrome-sandbox
@@ -64,6 +71,7 @@ install -Dm644 %{SOURCE3} %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/lin
 %{_datadir}/applications/linux-command-centre.desktop
 %{_datadir}/polkit-1/actions/io.lcc.helper.policy
 %{_datadir}/icons/hicolor/512x512/apps/linux-command-centre.png
+/usr/lib/linux-command-centre/
 
 %changelog
 * Mon Sep 07 2026 Homezloco <shanepeterholmes@gmail.com> - 0.1.0-1

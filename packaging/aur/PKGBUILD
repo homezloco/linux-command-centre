@@ -56,4 +56,13 @@ package() {
 
   install -Dm644 "$srcdir/io.lcc.helper.policy" \
     "$pkgdir/usr/share/polkit-1/actions/io.lcc.helper.policy"
+
+  # The polkit action is bound to this wrapper's exact path — the wrapper and
+  # the helper JS it execs must live at this fixed root-owned location (the
+  # tarball ships them under resources/helper/ via extraResources).
+  install -d "$pkgdir/usr/lib/linux-command-centre"
+  install -m644 "$pkgdir/opt/linux-command-centre/resources/helper/lcc-helper.js" \
+    "$pkgdir/usr/lib/linux-command-centre/lcc-helper.js"
+  install -m755 "$pkgdir/opt/linux-command-centre/resources/helper/lcc-helper" \
+    "$pkgdir/usr/lib/linux-command-centre/lcc-helper"
 }

@@ -44,7 +44,7 @@ Privileged operations are gated through a whitelisted helper:
 - Wrapper script: `helper/lcc-helper` (installed root-owned at `/usr/lib/linux-command-centre/lcc-helper`)
 - Polkit policy: `helper/io.lcc.helper.policy` — bound to the wrapper path via `org.freedesktop.policykit.exec.path`, **not** to `/usr/bin/node`, so `pkexec node <other-script>` never matches the app's action
 - Bridge in main process: `src/main/privilege.ts` — prefers the installed wrapper; falls back to `pkexec node <helper-script>` in dev / AppImage / tar.gz (generic pkexec prompt, no custom action)
-- Package scripts: `helper/after-install.sh` / `helper/after-remove.sh` install/remove the wrapper, helper, and policy (wired via `linux.afterInstall`/`afterRemove` in `package.json`)
+- Package scripts: `helper/after-install.sh` / `helper/after-remove.sh` install/remove the wrapper, helper, and policy (wired via the `deb`/`rpm` target sections in `package.json` — electron-builder 26 does not accept these under `linux`)
 - Helper is bundled at `resources/helper/lcc-helper.js` in packaged builds
 - Policy is installed to `usr/share/polkit-1/actions/io.lcc.helper.policy` in the snap; the snap `install`/`post-refresh` hooks also install the wrapper, and `remove` cleans all three
 - Sensitive inputs (OpenVPN credentials/config, WireGuard private key, `/etc/hosts` content, etc.) are passed to the helper as JSON over **stdin** via `privilegedOpWithStdin`, never on the `pkexec` argv (argv is journal-logged and `/proc`-visible)
@@ -57,7 +57,7 @@ Privileged operations are gated through a whitelisted helper:
 | `snap/snapcraft.yaml` | Snap package definition (classic confinement) |
 | `.github/workflows/release.yml` | Builds `.deb`, `.rpm`, `.tar.gz`, `.snap` and drafts a GitHub Release |
 | `.github/workflows/snap-publish.yml` | Manually publishes the built `.snap` to the Snap Store |
-| `src/main/ipc.ts` | Electron IPC handlers (~4100 lines) |
+| `src/main/ipc.ts` | Electron IPC handlers (~4200 lines) |
 | `src/main/privilege.ts` | `pkexec` bridge to the root helper |
 | `src/shared/ipc-channels.ts` | Allowlist of every IPC channel — enforced by the preload and drift-checked against `ipcMain.handle` calls in dev |
 | `src/shared/electron-api.ts` | Type of `window.electronAPI` (preload bridge), declared on `Window` for the renderer |
@@ -68,11 +68,16 @@ Privileged operations are gated through a whitelisted helper:
 
 - `.env.local` is gitignored and excluded from packages. In dev it is loaded from the project root; in packaged builds it is loaded from `app.getPath('userData')` so `CLAUDE_API_KEY` can still be supplied for the AI diagnostics panel.
 
+## Security panel notes
+
+- ClamAV scan/audit state is in-memory in the main process, but completed results persist to `userData/security-history.json` and are rehydrated on startup — the panel shows them via the `security:*-status` channels.
+- Scan excludes are directory-name fragments (`--exclude-dir`); a trailing `*` means prefix match (`cuttlefish*`). Default-on options include node_modules, .cache, Android SDK/emulator images, tool caches, and dreamos.
+
 ## Snap Store notes
 
 - Confinement is `classic` because the app performs system-level writes that have no snapd interface (GRUB, kernel modules, users, apt upgrades, UFW, `/etc/hosts`, `/etc/resolv.conf`, etc.).
-- A classic-confinement request is tracked at https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163.
-- Do **not** run the `Publish Snap` workflow until that request is approved.
+- The classic-confinement request was **declined** (see https://forum.snapcraft.io/t/classic-confinement-request-for-linux-command-centre/53163 and `packaging/README.md`) — Canonical excludes root-helper-via-pkexec from classic confinement. Re-requesting would need a strict-confinement rework or a more established project.
+- Do **not** run the `Publish Snap` workflow.
 - Publishing to the Snap Store requires a GitHub secret `SNAPCRAFT_STORE_CREDENTIALS`, generated via `snapcraft export-login`.
 
 ## Local build tip

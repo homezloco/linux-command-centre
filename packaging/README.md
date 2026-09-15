@@ -27,17 +27,16 @@ Each manifest also installs, on top of the tarball's contents:
 - `io.lcc.helper.policy` → `/usr/share/polkit-1/actions/`, needed for the
   root-privileged hardware-config helper (`helper/lcc-helper.js`) to be
   authorized via `pkexec`
+- `lcc-helper` + `lcc-helper.js` → `/usr/lib/linux-command-centre/` (the
+  tarball ships them under `resources/helper/`). The polkit action is bound
+  to the wrapper's exact path — without it, privileged ops still work but
+  fall back to the generic `org.freedesktop.policykit.exec` action (no
+  `auth_admin_keep`, generic prompt text).
 
-**Heads up:** that policy file is *not* currently included in the `.deb` or
-`.rpm` that `release.yml`/`package.json` build either — `extraResources` in
-`package.json` only copies `helper/lcc-helper.js`, not
-`helper/io.lcc.helper.policy`. Only the Snap build's `override-build` step
-copies it. That means hardware-config actions likely fail silently today on
-anyone who installed the existing GitHub Release `.deb`/`.rpm` outside of
-this packaging. Each manifest here works around it by installing its own
-bundled copy of the policy file, independent of that gap — but the upstream
-`extraResources` list is worth fixing separately so the primary `.deb`/`.rpm`
-work too.
+The upstream `.deb`/`.rpm` now ship the policy, wrapper, and helper via
+`extraResources` and install them at the same fixed paths from their
+postinst (`helper/after-install.sh`), so these manifests mirror that layout
+exactly.
 
 ## Hard prerequisite: publish the release
 
