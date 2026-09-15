@@ -24,3 +24,12 @@ export function tempColor(celsius: number): string {
   if (celsius >= 70) return 'text-status-warn'
   return 'text-status-ok'
 }
+
+/** Trailing-edge debounce for instant-save sliders (spec: 150 ms). */
+export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms = 150): (...args: A) => void {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return (...args: A) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }
+}
