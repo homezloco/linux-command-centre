@@ -155,6 +155,8 @@
 
   const current = $derived(modById.get($active) ?? allMods[0])
   const cache = $derived(navCache($active, $pins, $recents, knownIds))
+  // KD 14: Logs is the only fill page; every other panel uses the shell scroller.
+  const pageFill = $derived($active === 'logs')
 
   let navQuery = $state('')
   const filtering = $derived(navQuery.trim().length > 0)
@@ -439,11 +441,19 @@
       </button>
     </header>
     <div class="flex-1 min-h-0 flex flex-col relative">
-      <div class="page-body flex-1 min-h-0 overflow-y-auto p-5">
+      <div
+        class="page-body flex-1 min-h-0 {pageFill
+          ? 'overflow-hidden px-5 pt-5 pb-0'
+          : 'overflow-y-auto p-5'}"
+      >
         {#each cache as id (id)}
           {@const Comp = componentById.get(id)}
           {#if Comp}
-            <div hidden={$active !== id} inert={$active !== id}>
+            <div
+              hidden={$active !== id}
+              inert={$active !== id}
+              class={id === 'logs' ? 'h-full min-h-0' : undefined}
+            >
               <Comp visible={$active === id} />
             </div>
           {/if}
