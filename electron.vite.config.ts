@@ -13,6 +13,7 @@ export default defineConfig({
     resolve: {
       alias: {
         $lib: resolve('src/renderer/src/lib'),
+        $ui: resolve('src/renderer/src/components/ui'),
         $stores: resolve('src/renderer/src/stores'),
         $modules: resolve('src/renderer/src/modules')
       }

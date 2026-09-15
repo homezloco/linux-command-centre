@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { streamStore } from '$stores/stream'
+  import { subscribeStream } from '$stores/stream'
   import { BatteryCharging, Battery, BatteryWarning, Clock, Zap, RotateCw, Gauge } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert from '$lib/Alert.svelte'
+
+  let { visible = true }: { visible?: boolean } = $props()
 
   type BatteryStatus = {
     capacity: number
@@ -27,16 +29,21 @@
   let saving = $state(false)
   let error = $state('')
 
-  // Live battery stream for history chart
-  const stream = streamStore<BatteryFrame>('battery', { timestamp: 0, capacity: 0, status: '' })
+  // Live battery stream for history chart — paused while the cached panel is hidden
   let history = $state<{ t: number; v: number }[]>([])
+  let unsub: (() => void) | undefined
 
   $effect(() => {
-    const frame = $stream
-    if (frame.timestamp > 0) {
-      history = [...untrack(() => history).slice(-59), { t: frame.timestamp, v: frame.capacity }]
+    if (!visible) { unsub?.(); unsub = undefined; return }
+    if (!unsub) {
+      unsub = subscribeStream<BatteryFrame>('battery', (frame) => {
+        if (frame.timestamp > 0) {
+          history = [...history.slice(-59), { t: frame.timestamp, v: frame.capacity }]
+        }
+      })
     }
   })
+  onDestroy(() => unsub?.())
 
   async function load(): Promise<void> {
     loading = true

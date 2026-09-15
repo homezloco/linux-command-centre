@@ -5,6 +5,8 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
+  let { visible = true }: { visible?: boolean } = $props()
+
   type DateTimeStatus = {
     timezone: string; ntpEnabled: boolean; ntpSynced: boolean
     localTime: string; universalTime: string; rtcTime: string
@@ -69,7 +71,10 @@
   onMount(() => {
     load()
     loadTimezones()
-    clockInterval = setInterval(() => now = new Date(), 1000)
+  })
+  $effect(() => {
+    if (!visible) { clearInterval(clockInterval); clockInterval = undefined; return }
+    if (!clockInterval) clockInterval = setInterval(() => now = new Date(), 1000)
   })
   onDestroy(() => clearInterval(clockInterval))
 </script>

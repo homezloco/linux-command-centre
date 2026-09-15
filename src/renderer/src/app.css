@@ -1,3 +1,16 @@
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-Variable.woff2') format('woff2');
+  font-weight: 400 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../assets/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  font-weight: 400 500;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -19,6 +32,7 @@
     --accent: 224 10% 13%;
     --accent-foreground: 210 16% 96%;
     --destructive: 0 82% 62%;
+    --destructive-foreground: 0 0% 100%;
     --ring: 213 93% 63%;
     --radius: 0.6rem;
     --status-ok: 142 71% 45%;
@@ -30,6 +44,12 @@
     --glow: 213 93% 63%;
     --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
     --bg-image: none;
+    --hover-overlay: 0 0% 100%;
+    --hover-overlay-alpha: 0.04;
+    --scrollbar-hover: 220 9% 32%;
+    --toggle-thumb: 0 0% 100%;
+    --wco-right: 140px;
+    --wco-left: 0px;
   }
 
   /* ── Cyberdeck — high-tech neon HUD ─────────────────────────────────────── */
@@ -49,6 +69,7 @@
     --accent: 200 40% 11%;
     --accent-foreground: 190 40% 92%;
     --destructive: 350 90% 60%;
+    --destructive-foreground: 0 0% 100%;
     --ring: 187 92% 55%;
     --status-ok: 152 80% 50%;
     --status-warn: 45 95% 55%;
@@ -79,6 +100,7 @@
     --accent: 95 12% 10%;
     --accent-foreground: 90 15% 88%;
     --destructive: 5 75% 50%;
+    --destructive-foreground: 0 0% 100%;
     --ring: 84 70% 45%;
     --status-ok: 84 70% 45%;
     --status-warn: 45 85% 50%;
@@ -108,6 +130,7 @@
     --accent: 265 30% 13%;
     --accent-foreground: 300 30% 94%;
     --destructive: 0 85% 60%;
+    --destructive-foreground: 0 0% 100%;
     --ring: 320 90% 62%;
     --status-ok: 160 80% 50%;
     --status-warn: 40 95% 55%;
@@ -138,6 +161,7 @@
     --accent: 120 20% 9%;
     --accent-foreground: 120 60% 78%;
     --destructive: 0 80% 55%;
+    --destructive-foreground: 0 0% 100%;
     --ring: 120 90% 45%;
     --status-ok: 120 90% 45%;
     --status-warn: 60 90% 50%;
@@ -149,6 +173,37 @@
       repeating-linear-gradient(0deg, hsl(120 90% 45% / 0.035) 0px, hsl(120 90% 45% / 0.035) 1px, transparent 1px, transparent 3px),
       radial-gradient(ellipse at center, transparent 55%, hsl(120 15% 0% / 0.5) 100%);
   }
+
+  /* ── Light — daylight & paper ─────────────────────────────────────────────── */
+  :root[data-theme='light'] {
+    --background: 220 14% 97%;
+    --foreground: 224 14% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 14% 10%;
+    --border: 220 10% 88%;
+    --input: 220 10% 88%;
+    --primary: 213 90% 46%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 93%;
+    --secondary-foreground: 224 14% 10%;
+    --muted: 220 14% 93%;
+    --muted-foreground: 220 9% 38%;
+    --accent: 220 14% 93%;
+    --accent-foreground: 224 14% 10%;
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 100%;
+    --ring: 213 90% 46%;
+    --status-ok: 142 60% 32%;
+    --status-warn: 38 92% 36%;
+    --status-fail: 0 72% 46%;
+    --sidebar-bg: 220 14% 95%;
+    --glow: 213 90% 46%;
+    --bg-image: none;
+    --hover-overlay: 224 14% 4%;
+    --hover-overlay-alpha: 0.06;
+    --scrollbar-hover: 220 9% 62%;
+    --toggle-thumb: 0 0% 100%;
+  }
 }
 
 @layer base {
@@ -156,6 +211,7 @@
 
   html {
     background: hsl(var(--background));
+    font-size: 16px;
   }
 
   body {
@@ -184,7 +240,7 @@
   ::-webkit-scrollbar           { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track     { background: transparent; }
   ::-webkit-scrollbar-thumb     { background: hsl(var(--border)); border-radius: 99px; }
-  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--scrollbar-hover)); }
   ::-webkit-scrollbar-corner    { background: transparent; }
 
   /* Selection colour matches primary */
@@ -197,6 +253,16 @@
 /* Drag region for custom title bar */
 .drag-region  { -webkit-app-region: drag; }
 .no-drag      { -webkit-app-region: no-drag; }
+
+/* Window-control overlay insets. --wco-right default 140px is stylesheet-only;
+   JS may set it to 0 after measuring (left-side buttons). */
+.app-header {
+  height: 2.75rem; /* 44px; not rem-tied to ui-scale */
+  padding-right: max(0.75rem, var(--wco-right));
+}
+.sidebar-brand {
+  padding-left: max(1rem, var(--wco-left));
+}
 
 /* uPlot font */
 .uplot, .uplot *, .uplot canvas { @apply font-sans; }
@@ -231,11 +297,6 @@ select:focus {
   border-color: hsl(var(--primary) / 0.4) !important;
 }
 
-/* ── Button press micro-interaction ───────────────────────────────────────── */
-button:not(:disabled):active {
-  transform: scale(0.97);
-}
-
 /* ── Status dot utilities ─────────────────────────────────────────────────── */
 .dot-ok   { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-ok))]; }
 .dot-warn { @apply inline-block w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-warn))]; }
@@ -262,4 +323,16 @@ button:not(:disabled):active {
 :root[data-theme='matrix'] :focus-visible {
   outline-color: hsl(var(--glow) / 0.7);
   box-shadow: 0 0 10px hsl(var(--glow) / 0.4);
+}
+
+html[data-reduce-effects] { --bg-image: none !important; }
+html[data-reduce-effects] .bg-card,
+html[data-reduce-effects] .bg-primary { box-shadow: none !important; }
+
+button.pressable:not(:disabled):active { transform: scale(0.97); }
+
+html[data-reduce-effects] button.pressable:not(:disabled):active { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  button.pressable:not(:disabled):active { transform: none; }
 }

@@ -2,6 +2,12 @@
 // Renderer code reads it via the Window declaration in
 // src/renderer/src/electron-api.d.ts; the preload annotates its exported
 // object with this type so the two sides can't drift apart silently.
+export type TitleBarOverlayOpts = {
+  color: string
+  symbolColor: string
+  source: 'light' | 'dark'
+}
+
 export interface ElectronAPI {
   invoke: <T = unknown>(channel: string, ...args: unknown[]) => Promise<T>
   onUpdatesProgress: (callback: (output: string) => void) => () => void

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, nativeTheme } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import './env'
@@ -77,7 +77,6 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('io.lcc.app')
-  nativeTheme.themeSource = 'dark'
 
   app.on('browser-window-created', (_, win) => {
     optimizer.watchWindowShortcuts(win)

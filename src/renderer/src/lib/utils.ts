@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
 
+export function overlayPortalTarget(): HTMLElement {
+  return document.getElementById('lcc-overlay-root') ?? document.body
+}
+
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return window.electronAPI.invoke<T>(channel, ...args)
 }
@@ -16,7 +20,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function tempColor(celsius: number): string {
-  if (celsius >= 85) return 'text-red-400'
-  if (celsius >= 70) return 'text-yellow-400'
-  return 'text-green-400'
+  if (celsius >= 85) return 'text-status-fail'
+  if (celsius >= 70) return 'text-status-warn'
+  return 'text-status-ok'
 }

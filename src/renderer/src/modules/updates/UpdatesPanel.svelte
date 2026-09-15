@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { Page, Card, Skeleton, Button, Dialog, EmptyState } from '$ui'
   import { toasts } from '$stores/toasts'
+  import { refreshBadges } from '$stores/badges'
+  import Alert from '$lib/Alert.svelte'
   import {
-    RefreshCw, CheckCircle, AlertCircle, Download, ChevronDown, ChevronUp,
-    ShieldAlert, Package, FileText, RotateCw, Loader2, Power
+    RefreshCw, CheckCircle2, Download, ChevronDown, ChevronUp,
+    ShieldAlert, Package, FileText, Loader2, Trash2
   } from 'lucide-svelte'
 
   type PackageUpdate = {
@@ -24,6 +27,12 @@
     lastCheck: string
   }
 
+  type PackageHealth = {
+    upgradable: number; autoremovable: string[]; cacheBytes: number; installedCount: number
+  }
+
+  const labelCls = 'text-[11px] text-muted-foreground uppercase tracking-wide'
+
   let status = $state<UpdateStatus | null>(null)
   let loading = $state(true)
   let checking = $state(false)
@@ -37,8 +46,9 @@
   let upgradePhase = $state<'download' | 'unpack' | 'configure' | 'cleanup' | null>(null)
   let currentPackage = $state<string | null>(null)
   let lastOutputAt = $state<number | null>(null)
+  let upgradeStartedAt = $state<number | null>(null)
 
-  // Changelog modal
+  // Changelog dialog
   let changelogPkg = $state<string | null>(null)
   let changelogContent = $state('')
   let changelogLoading = $state(false)
@@ -47,16 +57,33 @@
   let expandSecurity = $state(true)
   let expandRegular = $state(false)
 
+  // Package status (moved here from System info)
+  let pkgHealth = $state<PackageHealth | null>(null)
+  let pkgHealthLoading = $state(true)
+  let pkgHealthError = $state('')
+
+  async function loadPackageHealth() {
+    pkgHealthLoading = true; pkgHealthError = ''
+    try { pkgHealth = await invoke<PackageHealth>('system:packageHealth') }
+    catch (e) { pkgHealthError = formatError(e) }
+    finally { pkgHealthLoading = false }
+  }
+
+  async function fetchStatus() {
+    status = await invoke<UpdateStatus>('updates:check')
+    // Auto-select security packages
+    if (status) {
+      selectedPackages = new Set(status.packages.filter(p => p.isSecurity).map(p => p.name))
+    }
+  }
+
   async function load() {
     loading = true; error = ''
+    void loadPackageHealth()
     try {
-      status = await invoke<UpdateStatus>('updates:check')
-      // Auto-select security packages
-      if (status) {
-        selectedPackages = new Set(status.packages.filter(p => p.isSecurity).map(p => p.name))
-      }
+      await fetchStatus()
     } catch (e) {
-      error = String(e)
+      error = formatError(e)
     } finally {
       loading = false
     }
@@ -64,13 +91,11 @@
 
   async function check() {
     checking = true; error = ''
+    void loadPackageHealth()
     try {
-      status = await invoke<UpdateStatus>('updates:check')
-      if (status) {
-        selectedPackages = new Set(status.packages.filter(p => p.isSecurity).map(p => p.name))
-      }
+      await fetchStatus()
     } catch (e) {
-      error = String(e)
+      error = formatError(e)
     } finally {
       checking = false
     }
@@ -87,6 +112,7 @@
     upgradeProgress = message
     if (success) {
       toasts.success(message, 'Updates')
+      void refreshBadges()
     } else {
       toasts.error(message || 'Upgrade failed', 'Updates')
     }
@@ -144,7 +170,7 @@
     try {
       const res = await invoke<{ changelog: string }>('updates:changelog', pkg)
       changelogContent = res.changelog || 'No changelog available'
-    } catch (e) {
+    } catch {
       changelogContent = 'Failed to load changelog'
     } finally {
       changelogLoading = false
@@ -158,13 +184,8 @@
     selectedPackages = next
   }
 
-  function selectAll(packages: PackageUpdate[], select: boolean) {
-    if (select) {
-      selectedPackages = new Set([...selectedPackages, ...packages.map(p => p.name)])
-    } else {
-      const toRemove = new Set(packages.map(p => p.name))
-      selectedPackages = new Set([...selectedPackages].filter(x => !toRemove.has(x)))
-    }
+  function selectAll(packages: PackageUpdate[]) {
+    selectedPackages = new Set([...selectedPackages, ...packages.map(p => p.name)])
   }
 
   function formatError(value: unknown): string {
@@ -179,6 +200,12 @@
     const m = Math.floor(s / 60)
     const r = s % 60
     return `${m}m ${r.toString().padStart(2, '0')}s`
+  }
+
+  function fmtBytes(bytes: number): string {
+    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB'
+    if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB'
+    return (bytes / 1e3).toFixed(0) + ' KB'
   }
 
   function parseProgress(output: string) {
@@ -238,8 +265,6 @@
     cleanup: 'Finishing',
   }
 
-  let upgradeStartedAt = $state<number | null>(null)
-
   onMount(() => {
     void load()
     return window.electronAPI.onUpdatesProgress((output) => {
@@ -252,281 +277,262 @@
   const regularPackages = $derived(status?.packages.filter(p => !p.isSecurity) ?? [])
 </script>
 
-<div class="max-w-2xl space-y-4">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <Package size={18} class="text-primary" />
-      <span class="text-sm font-medium">System Updates</span>
+{#snippet packageRow(pkg: PackageUpdate)}
+  <div class="flex items-center gap-3 px-4 py-3">
+    <input
+      type="checkbox"
+      checked={selectedPackages.has(pkg.name)}
+      onchange={() => togglePackage(pkg.name)}
+      aria-label="Select {pkg.name}"
+      class="rounded border-border bg-secondary"
+    />
+    <div class="flex-1 min-w-0">
+      <p class="text-[13px] font-medium truncate">{pkg.name}</p>
+      <div class="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>{pkg.currentVersion} → {pkg.newVersion}</span>
+        <span>·</span>
+        <span>{pkg.size}</span>
+      </div>
     </div>
-    <button
-      onclick={check}
-      disabled={checking || loading}
-      class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border
-             hover:bg-secondary transition-colors disabled:opacity-50"
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="View changelog for {pkg.name}"
+      onclick={() => showChangelog(pkg.name)}
     >
-      <RefreshCw size={11} class={checking ? 'animate-spin' : ''} />
-      {checking ? 'Checking…' : 'Refresh'}
-    </button>
+      <FileText size={14} />
+    </Button>
+  </div>
+{/snippet}
+
+{#snippet packageSection(
+  title: string,
+  packages: PackageUpdate[],
+  expanded: boolean,
+  toggle: () => void,
+  icon: 'security' | 'regular',
+)}
+  <Card padding="none" class="overflow-hidden">
+    <div class="flex items-center gap-2 pr-2">
+      <button
+        type="button"
+        onclick={toggle}
+        aria-expanded={expanded}
+        class="flex-1 min-w-0 flex items-center gap-3 px-4 py-3 text-left hover:bg-[hsl(var(--hover-overlay)/var(--hover-overlay-alpha))] transition-colors"
+      >
+        {#if icon === 'security'}
+          <ShieldAlert size={18} class="text-status-warn shrink-0" />
+        {:else}
+          <Package size={18} class="text-muted-foreground shrink-0" />
+        {/if}
+        <span class="text-[13px] font-medium flex-1">{title} ({packages.length})</span>
+        {#if expanded}
+          <ChevronUp size={16} class="text-muted-foreground shrink-0" />
+        {:else}
+          <ChevronDown size={16} class="text-muted-foreground shrink-0" />
+        {/if}
+      </button>
+      <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={() => selectAll(packages)}>
+        Select all
+      </Button>
+    </div>
+    {#if expanded}
+      <div class="divide-y divide-border border-t border-border">
+        {#each packages as pkg (pkg.name)}
+          {@render packageRow(pkg)}
+        {/each}
+      </div>
+    {/if}
+  </Card>
+{/snippet}
+
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Check for updates"
+      disabled={checking || loading || upgrading}
+      onclick={check}
+    >
+      <RefreshCw size={14} class={checking ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
+
+  <div class="space-y-4">
+    {#if error}
+      <Alert message={error} />
+    {/if}
+
+    {#if upgrading || upgradeProgress}
+      <Card padding="sm" class="space-y-2">
+        <div class="flex items-center justify-between gap-3 text-[13px]">
+          <div class="flex items-center gap-2 min-w-0">
+            {#if upgrading}<Loader2 size={14} class="animate-spin text-primary shrink-0" />{/if}
+            <span class="font-medium truncate">{upgradeProgress}</span>
+          </div>
+          {#if upgrading && upgradeStartedAt}
+            <span class="text-[11px] tabular-nums text-muted-foreground shrink-0">
+              {formatElapsed(upgradeStartedAt)}
+            </span>
+          {/if}
+        </div>
+
+        {#if upgrading}
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            {#if upgradePhase && currentPackage}
+              <span class="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground">
+                {phaseLabel[upgradePhase]} <span class="font-mono text-primary">{currentPackage}</span>
+              </span>
+            {:else}
+              <span class="px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">Preparing…</span>
+            {/if}
+            {#if lastOutputAt}
+              {@const idleSec = Math.round((Date.now() - lastOutputAt) / 1000)}
+              <span class="text-muted-foreground">
+                last output {idleSec < 5 ? 'just now' : `${idleSec}s ago`}
+              </span>
+            {/if}
+          </div>
+          <p class="text-[11px] text-muted-foreground">
+            Large downloads can take several minutes. If the timer keeps advancing, the upgrade is still in progress.
+          </p>
+        {/if}
+
+        {#if upgradeOutput}
+          <pre class="max-h-48 overflow-y-auto rounded-md bg-black/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap font-mono">{upgradeOutput}</pre>
+        {/if}
+      </Card>
+    {/if}
+
+    {#if loading}
+      <Skeleton class="h-20 w-full" />
+      <Skeleton class="h-12 w-full" />
+      <Skeleton class="h-12 w-full" />
+    {:else if status}
+      {#if status.rebootRequired}
+        <Alert variant="warn" message="A restart is required to finish applying updates." />
+      {/if}
+
+      {#if status.packages.length === 0}
+        <EmptyState
+          icon={CheckCircle2}
+          title="System is up to date"
+          message="Kernel {status.runningKernel}"
+        />
+      {:else}
+        <!-- Status summary card -->
+        <Card>
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <Download size={24} class="shrink-0 {securityPackages.length > 0 ? 'text-status-warn' : 'text-primary'}" />
+              <div class="min-w-0">
+                <p class="text-[13px] font-medium">{status.packages.length} update{status.packages.length === 1 ? '' : 's'} available</p>
+                {#if securityPackages.length > 0}
+                  <p class="text-xs text-status-warn">{securityPackages.length} security update{securityPackages.length === 1 ? '' : 's'}</p>
+                {:else}
+                  <p class="text-xs text-muted-foreground">Kernel {status.runningKernel}</p>
+                {/if}
+              </div>
+            </div>
+
+            {#if !upgrading}
+              <div class="flex items-center gap-2 shrink-0">
+                {#if selectedPackages.size > 0}
+                  <Button variant="primary" size="sm" onclick={upgradeSelected}>
+                    Upgrade {selectedPackages.size}
+                  </Button>
+                {/if}
+                <Button variant="secondary" size="sm" onclick={upgradeAll}>
+                  Upgrade All
+                </Button>
+              </div>
+            {/if}
+          </div>
+          <p class="text-[11px] text-muted-foreground mt-3 pt-3 border-t border-border/60">
+            Upgrade All also installs updates deferred by phased rollout or held back for new dependencies.
+          </p>
+        </Card>
+      {/if}
+
+      {#if securityPackages.length > 0}
+        {@render packageSection(
+          'Security Updates',
+          securityPackages,
+          expandSecurity,
+          () => { expandSecurity = !expandSecurity },
+          'security',
+        )}
+      {/if}
+
+      {#if regularPackages.length > 0}
+        {@render packageSection(
+          'Regular Updates',
+          regularPackages,
+          expandRegular,
+          () => { expandRegular = !expandRegular },
+          'regular',
+        )}
+      {/if}
+    {/if}
+
+    <!-- Package status (moved here from System info) -->
+    <div class="space-y-2">
+      <p class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground px-0.5">Package status</p>
+      {#if pkgHealthLoading && !pkgHealth}
+        <Skeleton class="h-24 w-full" />
+      {:else if pkgHealth}
+        <Card class="space-y-3">
+          <div class="grid grid-cols-3 gap-2">
+            <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+              <p class={labelCls}>Installed</p>
+              <p class="text-[13px] font-medium tabular-nums mt-0.5">{pkgHealth.installedCount}</p>
+            </div>
+            <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+              <p class={labelCls}>Upgradable</p>
+              <p class="text-[13px] font-medium tabular-nums mt-0.5">{pkgHealth.upgradable}</p>
+            </div>
+            <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
+              <p class={labelCls}>Cache size</p>
+              <p class="text-[13px] font-medium tabular-nums mt-0.5">{fmtBytes(pkgHealth.cacheBytes)}</p>
+            </div>
+          </div>
+          {#if pkgHealth.autoremovable.length > 0}
+            <div class="border-t border-border pt-3">
+              <p class="{labelCls} font-medium mb-1.5 flex items-center gap-1.5">
+                <Trash2 size={11} />
+                {pkgHealth.autoremovable.length} package{pkgHealth.autoremovable.length === 1 ? '' : 's'} no longer needed
+              </p>
+              <p class="text-[11px] text-muted-foreground leading-relaxed">{pkgHealth.autoremovable.join(', ')}</p>
+            </div>
+          {/if}
+        </Card>
+      {:else if pkgHealthError}
+        <Alert message={pkgHealthError} />
+      {/if}
+    </div>
   </div>
 
-  {#if error}
-    <div class="rounded-xl border border-destructive/30 bg-destructive/10 p-3">
-      <p class="text-sm text-destructive flex items-center gap-2">
-        <AlertCircle size={14} />
-        {error}
-      </p>
-    </div>
-  {/if}
-
-  {#if upgrading || upgradeProgress}
-    <div class="rounded-xl border border-border bg-card p-3 space-y-2">
-      <div class="flex items-center justify-between gap-3 text-sm">
-        <div class="flex items-center gap-2 min-w-0">
-          {#if upgrading}<Loader2 size={14} class="animate-spin text-primary shrink-0" />{/if}
-          <span class="font-medium truncate">{upgradeProgress}</span>
+  <Dialog
+    open={changelogPkg !== null}
+    onOpenChange={(open) => { if (!open) changelogPkg = null }}
+    title="{changelogPkg ?? ''} — Changelog"
+    class="max-w-lg"
+  >
+    <div class="max-h-[60vh] overflow-y-auto">
+      {#if changelogLoading}
+        <div class="space-y-2">
+          <Skeleton class="h-3 w-3/4" />
+          <Skeleton class="h-3 w-full" />
+          <Skeleton class="h-3 w-5/6" />
+          <Skeleton class="h-3 w-2/3" />
         </div>
-        {#if upgrading && upgradeStartedAt}
-          <span class="text-[10px] tabular-nums text-muted-foreground shrink-0">
-            {formatElapsed(upgradeStartedAt)}
-          </span>
-        {/if}
-      </div>
-
-      {#if upgrading}
-        <div class="flex flex-wrap items-center gap-2 text-xs">
-          {#if upgradePhase && currentPackage}
-            <span class="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground">
-              {phaseLabel[upgradePhase]} <span class="font-mono text-primary">{currentPackage}</span>
-            </span>
-          {:else}
-            <span class="px-2 py-0.5 rounded-md bg-secondary text-muted-foreground">Preparing…</span>
-          {/if}
-          {#if lastOutputAt}
-            {@const idleSec = Math.round((Date.now() - lastOutputAt) / 1000)}
-            <span class="text-muted-foreground">
-              last output {idleSec < 5 ? 'just now' : `${idleSec}s ago`}
-            </span>
-          {/if}
-        </div>
-        <p class="text-[10px] text-muted-foreground">
-          Large downloads can take several minutes. If the timer keeps advancing, the upgrade is still in progress.
-        </p>
-      {/if}
-
-      {#if upgradeOutput}
-        <pre class="max-h-48 overflow-y-auto rounded-md bg-black/40 p-3 text-xs text-muted-foreground whitespace-pre-wrap font-mono">{upgradeOutput}</pre>
+      {:else}
+        <pre class="text-xs text-muted-foreground whitespace-pre-wrap font-mono">{changelogContent}</pre>
       {/if}
     </div>
-  {/if}
-
-  {#if loading}
-    <div class="h-48 flex items-center justify-center text-muted-foreground">
-      <Loader2 size={20} class="animate-spin mr-2" />
-      Checking for updates…
+    <div class="flex justify-end pt-1">
+      <Button variant="secondary" size="sm" onclick={() => changelogPkg = null}>Close</Button>
     </div>
-  {:else if status}
-
-    <!-- Status summary card -->
-    <div class="rounded-xl border border-border bg-card p-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-3">
-          {#if status.packages.length === 0}
-            <CheckCircle size={24} class="text-green-400" />
-            <div>
-              <p class="text-sm font-medium">System is up to date</p>
-              <p class="text-xs text-muted-foreground">Kernel {status.runningKernel}</p>
-            </div>
-          {:else}
-            <Download size={24} class={securityPackages.length > 0 ? 'text-yellow-400' : 'text-primary'} />
-            <div>
-              <p class="text-sm font-medium">{status.packages.length} update{status.packages.length === 1 ? '' : 's'} available</p>
-              {#if securityPackages.length > 0}
-                <p class="text-xs text-yellow-400">{securityPackages.length} security update{securityPackages.length === 1 ? '' : 's'}</p>
-              {:else}
-                <p class="text-xs text-muted-foreground">Kernel {status.runningKernel}</p>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        {#if status.packages.length > 0 && !upgrading}
-          <div class="flex items-center gap-2">
-            {#if selectedPackages.size > 0}
-              <button
-                onclick={upgradeSelected}
-                class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium
-                       hover:bg-primary/90 transition-colors"
-              >
-                Upgrade {selectedPackages.size}
-              </button>
-            {/if}
-            <button
-              onclick={upgradeAll}
-              title="Full upgrade — also installs updates normally deferred by phased rollout or held back for new dependencies"
-              class="px-3 py-1.5 rounded-md border border-border hover:bg-secondary transition-colors"
-            >
-              Upgrade All
-            </button>
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <!-- Security updates section -->
-    {#if securityPackages.length > 0}
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
-        <button
-          onclick={() => expandSecurity = !expandSecurity}
-          class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
-        >
-          <div class="flex items-center gap-3">
-            <ShieldAlert size={18} class="text-yellow-400" />
-            <span class="text-sm font-medium">Security Updates ({securityPackages.length})</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span
-              role="button" tabindex="0"
-              onclick={(e) => { e.stopPropagation(); selectAll(securityPackages, true) }}
-              onkeydown={(e) => e.key === 'Enter' && selectAll(securityPackages, true)}
-              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded cursor-pointer"
-            >
-              Select all
-            </span>
-            {#if expandSecurity}
-              <ChevronUp size={16} class="text-muted-foreground" />
-            {:else}
-              <ChevronDown size={16} class="text-muted-foreground" />
-            {/if}
-          </div>
-        </button>
-
-        {#if expandSecurity}
-          <div class="divide-y divide-border border-t border-border">
-            {#each securityPackages as pkg}
-              <div class="flex items-center gap-3 px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={selectedPackages.has(pkg.name)}
-                  onchange={() => togglePackage(pkg.name)}
-                  class="rounded border-border bg-secondary"
-                />
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium truncate">{pkg.name}</p>
-                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{pkg.currentVersion} → {pkg.newVersion}</span>
-                    <span>·</span>
-                    <span>{pkg.size}</span>
-                  </div>
-                </div>
-                <button
-                  onclick={() => showChangelog(pkg.name)}
-                  class="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  title="View changelog"
-                >
-                  <FileText size={14} />
-                </button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Regular updates section -->
-    {#if regularPackages.length > 0}
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
-        <button
-          onclick={() => expandRegular = !expandRegular}
-          class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
-        >
-          <div class="flex items-center gap-3">
-            <Package size={18} class="text-muted-foreground" />
-            <span class="text-sm font-medium">Regular Updates ({regularPackages.length})</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <span
-              role="button" tabindex="0"
-              onclick={(e) => { e.stopPropagation(); selectAll(regularPackages, true) }}
-              onkeydown={(e) => e.key === 'Enter' && selectAll(regularPackages, true)}
-              class="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded cursor-pointer"
-            >
-              Select all
-            </span>
-            {#if expandRegular}
-              <ChevronUp size={16} class="text-muted-foreground" />
-            {:else}
-              <ChevronDown size={16} class="text-muted-foreground" />
-            {/if}
-          </div>
-        </button>
-
-        {#if expandRegular}
-          <div class="divide-y divide-border border-t border-border">
-            {#each regularPackages as pkg}
-              <div class="flex items-center gap-3 px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={selectedPackages.has(pkg.name)}
-                  onchange={() => togglePackage(pkg.name)}
-                  class="rounded border-border bg-secondary"
-                />
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm font-medium truncate">{pkg.name}</p>
-                  <div class="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{pkg.currentVersion} → {pkg.newVersion}</span>
-                    <span>·</span>
-                    <span>{pkg.size}</span>
-                  </div>
-                </div>
-                <button
-                  onclick={() => showChangelog(pkg.name)}
-                  class="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  title="View changelog"
-                >
-                  <FileText size={14} />
-                </button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-  {/if}
-
-  <!-- Changelog Modal -->
-  {#if changelogPkg}
-    <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div class="bg-card border border-border rounded-xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-xl">
-        <div class="flex items-center justify-between px-4 py-3 border-b border-border">
-          <p class="font-medium">{changelogPkg} — Changelog</p>
-          <button
-            onclick={() => changelogPkg = null}
-            class="text-muted-foreground hover:text-foreground"
-          >
-            ✕
-          </button>
-        </div>
-        <div class="p-4 overflow-y-auto flex-1">
-          {#if changelogLoading}
-            <div class="flex items-center justify-center py-8 text-muted-foreground">
-              <RotateCw size={16} class="animate-spin mr-2" />
-              Loading…
-            </div>
-          {:else}
-            <pre class="text-xs text-muted-foreground whitespace-pre-wrap font-mono">{changelogContent}</pre>
-          {/if}
-        </div>
-        <div class="px-4 py-3 border-t border-border">
-          <button
-            onclick={() => changelogPkg = null}
-            class="px-4 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/80 transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-</div>
+  </Dialog>
+</Page>

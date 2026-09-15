@@ -19,6 +19,7 @@ export const IPC_CHANNELS = [
   'appearance:set',
   'appearance:status',
   'app:info',
+  'app:setTitleBarOverlay',
   'audio:setDefaultSink',
   'audio:setDefaultSource',
   'audio:setStreamMute',
