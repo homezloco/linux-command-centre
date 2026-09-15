@@ -448,7 +448,7 @@
         Ctrl+K
       </button>
     </header>
-    <div class="flex-1 min-h-0 flex flex-col relative">
+    <div class="page-zoom flex-1 min-h-0 flex flex-col relative" style="zoom: var(--ui-scale, 1)">
       <div
         class="page-body flex-1 min-h-0 {pageFill
           ? 'overflow-hidden px-5 pt-5 pb-0'

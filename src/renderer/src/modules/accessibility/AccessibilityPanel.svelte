@@ -46,11 +46,14 @@
 {:else if status}
   <div class="space-y-4 max-w-sm">
 
-    {#snippet toggleRow(label: string, desc: string, key: keyof A11yStatus)}
+    {#snippet toggleRow(label: string, desc: string, key: keyof A11yStatus, disclaimer?: string)}
       <div class="flex items-center justify-between">
         <div class="flex-1 min-w-0 pr-4">
           <p class="text-sm">{label}</p>
           <p class="text-xs text-muted-foreground">{desc}</p>
+          {#if disclaimer}
+            <p class="text-xs text-muted-foreground">{disclaimer}</p>
+          {/if}
         </div>
         <button
           onclick={() => set(key, !status![key])}
@@ -70,9 +73,9 @@
       <p class="text-sm font-medium flex items-center gap-2">
         <Eye size={14} class="text-muted-foreground" /> Vision
       </p>
-      {@render toggleRow('High Contrast', 'Use high contrast GTK theme', 'highContrast')}
+      {@render toggleRow('High Contrast', 'Use high contrast GTK theme', 'highContrast', 'Applies to the desktop, not Command Centre.')}
       <div class="border-t border-border"></div>
-      {@render toggleRow('Screen Reader', 'Enable Orca screen reader', 'screenReader')}
+      {@render toggleRow('Screen Reader', 'Enable Orca screen reader', 'screenReader', 'Applies to the desktop, not Command Centre.')}
       <div class="border-t border-border"></div>
       {@render toggleRow('Screen Magnifier', 'Zoom into areas of the screen', 'magnifier')}
     </div>
