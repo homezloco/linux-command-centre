@@ -1,45 +1,59 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { isDangerousUnit } from '$lib/units'
   import { toasts } from '$stores/toasts'
-  import { RefreshCw, Play, Square, RotateCcw, Search } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { Page, Card, Skeleton, Button, Toggle, SegmentedControl, SearchField, ConfirmDialog, EmptyState } from '$ui'
+  import { RefreshCw, Play, Square, RotateCcw, Server } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type Service = {
     name: string; active: string; sub: string
     description: string; enabledState: string
   }
+  type UnitAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable'
+  type Filter = 'all' | 'active' | 'failed'
+
+  const TITLE = 'Services'
 
   let services   = $state<Service[]>([])
   let loading    = $state(true)
   let refreshing = $state(false)
   let error      = $state('')
-  let working    = $state<string | null>(null)
+  let actioning  = $state<Record<string, string>>({})
 
   let query  = $state('')
-  let filter = $state<'all' | 'active' | 'failed'>('all')
+  let filter = $state<Filter>('all')
+  let pendingUnit = $state<{ svc: Service; action: UnitAction } | null>(null)
 
   async function load(force = false) {
-    if (force) refreshing = true; else loading = true
+    if (force) refreshing = true
     error = ''
     try { services = await invoke<Service[]>('services:list') }
     catch (e) { error = String(e) }
     finally { loading = false; refreshing = false }
   }
 
-  async function act(name: string, action: string) {
-    working = `${name}:${action}`; error = ''
+  // Dangerous units get a ConfirmDialog before stop / restart / disable; the rest are instant.
+  function requestAction(svc: Service, action: UnitAction) {
+    if (action !== 'start' && action !== 'enable' && isDangerousUnit(svc.name)) {
+      pendingUnit = { svc, action }
+      return
+    }
+    void act(svc, action)
+  }
+
+  async function act(svc: Service, action: UnitAction) {
+    actioning = { ...actioning, [svc.name]: action }
     try {
-      await invoke('services:action', name, action)
+      await invoke('services:action', svc.name, action)
       const pastTense = action === 'stop' ? 'stopped' : `${action}ed`
-      toasts.success(`${shortUnit(name)} ${pastTense}`, 'Services')
+      toasts.success(`${shortUnit(svc.name)} ${pastTense}`, TITLE)
+      pendingUnit = null
       await load(true)
     } catch (e) {
-      const msg = String(e)
-      error = msg
-      toasts.error(msg, `Failed to ${action} service`)
-    } finally { working = null }
+      toasts.error(String(e), `Failed to ${action} service`)
+    } finally { actioning = { ...actioning, [svc.name]: '' } }
   }
 
   const filtered = $derived(
@@ -55,17 +69,22 @@
   )
 
   const failedCount = $derived(services.filter(s => s.active === 'failed').length)
+  const FILTER_OPTIONS = $derived([
+    { value: 'all' as Filter, label: 'All' },
+    { value: 'active' as Filter, label: 'Active' },
+    { value: 'failed' as Filter, label: failedCount > 0 ? `Failed (${failedCount})` : 'Failed' },
+  ])
 
-  function stateColor(active: string, sub: string): string {
-    if (active === 'failed') return 'text-destructive'
-    if (active === 'active' && sub === 'running') return 'text-green-400'
-    if (active === 'active') return 'text-blue-400'
-    return 'text-muted-foreground'
+  function subColor(sub: string): string {
+    if (sub === 'running') return 'text-status-ok'
+    if (sub === 'exited') return 'text-muted-foreground'
+    if (sub === 'failed') return 'text-status-fail'
+    return 'text-status-warn'
   }
 
   function stateDot(active: string): string {
-    if (active === 'failed') return 'bg-destructive'
-    if (active === 'active') return 'bg-green-400'
+    if (active === 'failed') return 'bg-status-fail'
+    if (active === 'active') return 'bg-status-ok'
     return 'bg-muted-foreground/40'
   }
 
@@ -73,131 +92,149 @@
     return unit.replace(/\.service$/, '')
   }
 
-  function isWorking(name: string, action: string): boolean {
-    return working === `${name}:${action}`
-  }
-
   onMount(() => load())
 </script>
 
-{#if loading}
-  <Spinner />
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh services"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-{:else}
-  <div class="space-y-3 max-w-3xl">
-
+  <div class="space-y-3">
     <!-- Toolbar -->
     <div class="flex items-center gap-2">
-      <div class="relative flex-1">
-        <Search size={13} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <input
-          bind:value={query}
-          placeholder="Search services…"
-          class="w-full pl-8 pr-3 py-1.5 rounded-md border border-border bg-secondary/50
-                 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-      </div>
-      <div class="flex rounded-md border border-border overflow-hidden text-xs">
-        {#each (['all', 'active', 'failed'] as const) as f}
-          <button
-            onclick={() => filter = f}
-            class="px-3 py-1.5 capitalize transition-colors
-                   {filter === f ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary text-muted-foreground'}"
-          >
-            {f}{f === 'failed' && failedCount > 0 ? ` (${failedCount})` : ''}
-          </button>
-        {/each}
-      </div>
-      <button
-        onclick={() => load(true)}
-        disabled={refreshing}
-        aria-label="Refresh services"
-        class="p-1.5 rounded-md hover:bg-secondary text-muted-foreground disabled:opacity-50"
-      >
-        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
-      </button>
+      <SearchField
+        value={query}
+        placeholder="Search services…"
+        aria-label="Search services"
+        class="flex-1"
+        onChange={(v) => { query = v }}
+      />
+      <SegmentedControl
+        value={filter}
+        options={FILTER_OPTIONS}
+        ariaLabel="Filter services"
+        onChange={(v) => { filter = v }}
+      />
     </div>
 
     {#if error}
       <Alert message={error} />
     {/if}
 
-    <!-- Service list -->
-    <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
-      {#each filtered as svc}
-        <div class="flex items-center gap-3 px-4 py-2.5">
-          <!-- Status dot -->
-          <div class="w-2 h-2 rounded-full shrink-0 {stateDot(svc.active)}"></div>
+    {#if loading}
+      <Card padding="none">
+        {#each [0, 1, 2, 3, 4, 5] as i (i)}
+          <div class="flex items-center gap-3 px-4 py-3 border-b border-border/60 last:border-0">
+            <Skeleton class="h-2 w-2 rounded-full shrink-0" />
+            <div class="flex-1 space-y-1.5">
+              <Skeleton class="h-3 w-48" />
+              <Skeleton class="h-2.5 w-72 max-w-full" />
+            </div>
+          </div>
+        {/each}
+      </Card>
+    {:else if filtered.length === 0}
+      <EmptyState
+        icon={Server}
+        title={query || filter !== 'all' ? 'No services match' : 'No services found'}
+        message={query ? 'Nothing matches the current search.' : 'systemd reported no loaded services.'}
+      >
+        {#snippet action()}
+          {#if query || filter !== 'all'}
+            <Button variant="secondary" size="sm" onclick={() => { query = ''; filter = 'all' }}>Clear filter</Button>
+          {/if}
+        {/snippet}
+      </EmptyState>
+    {:else}
+      <!-- Service list -->
+      <Card padding="none" class="divide-y divide-border overflow-hidden">
+        {#each filtered as svc (svc.name)}
+          {@const busy = actioning[svc.name]}
+          {@const canToggleEnable = svc.enabledState === 'enabled' || svc.enabledState === 'disabled'}
+          <div class="flex items-center gap-3 px-4 py-2.5 {busy ? 'opacity-60' : ''}">
+            <div class="w-2 h-2 rounded-full shrink-0 {stateDot(svc.active)}"></div>
 
-          <!-- Name + desc -->
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-medium font-mono">{shortUnit(svc.name)}</span>
-              {#if svc.enabledState === 'enabled'}
-                <span class="text-[9px] px-1 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">enabled</span>
-              {:else if svc.enabledState === 'disabled'}
-                <span class="text-[9px] px-1 py-0.5 rounded bg-secondary text-muted-foreground border border-border">disabled</span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-[13px] font-medium font-mono" id="svc-{svc.name}-label">{shortUnit(svc.name)}</span>
+                {#if !canToggleEnable}
+                  <span class="text-[11px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground shrink-0">{svc.enabledState}</span>
+                {/if}
+                <span class="text-xs {subColor(svc.sub)}">{svc.active}{svc.sub && svc.sub !== svc.active ? ` (${svc.sub})` : ''}</span>
+              </div>
+              {#if svc.description}
+                <p class="text-xs text-muted-foreground truncate">{svc.description}</p>
               {/if}
             </div>
-            {#if svc.description}
-              <p class="text-xs text-muted-foreground truncate">{svc.description}</p>
-            {/if}
+
+            <div class="flex items-center gap-1 shrink-0">
+              {#if svc.active === 'active'}
+                <Button
+                  variant="icon" size="sm"
+                  aria-label="Restart {svc.name}"
+                  class="hover:text-status-warn"
+                  disabled={!!busy}
+                  onclick={() => requestAction(svc, 'restart')}
+                >
+                  {#if busy === 'restart'}<RefreshCw size={13} class="animate-spin" />{:else}<RotateCcw size={13} />{/if}
+                </Button>
+                <Button
+                  variant="icon" size="sm"
+                  aria-label="Stop {svc.name}"
+                  class="hover:text-status-fail"
+                  disabled={!!busy}
+                  onclick={() => requestAction(svc, 'stop')}
+                >
+                  {#if busy === 'stop'}<RefreshCw size={13} class="animate-spin" />{:else}<Square size={13} />{/if}
+                </Button>
+              {:else}
+                <Button
+                  variant="icon" size="sm"
+                  aria-label="Start {svc.name}"
+                  class="hover:text-status-ok"
+                  disabled={!!busy}
+                  onclick={() => requestAction(svc, 'start')}
+                >
+                  {#if busy === 'start'}<RefreshCw size={13} class="animate-spin" />{:else}<Play size={13} />{/if}
+                </Button>
+              {/if}
+              {#if canToggleEnable}
+                <Toggle
+                  checked={svc.enabledState === 'enabled'}
+                  disabled={!!busy}
+                  aria-label="{svc.enabledState === 'enabled' ? 'Disable' : 'Enable'} {svc.name} at boot"
+                  onCheckedChange={(v) => requestAction(svc, v ? 'enable' : 'disable')}
+                />
+              {/if}
+            </div>
           </div>
+        {/each}
+      </Card>
 
-          <!-- State label -->
-          <span class="text-xs tabular-nums shrink-0 {stateColor(svc.active, svc.sub)}">
-            {svc.active}{svc.sub && svc.sub !== svc.active ? ` (${svc.sub})` : ''}
-          </span>
-
-          <!-- Action buttons -->
-          <div class="flex items-center gap-1 shrink-0">
-            {#if svc.active === 'active'}
-              <button
-                onclick={() => act(svc.name, 'stop')}
-                disabled={working !== null}
-                aria-label="Stop {svc.name}"
-                title="Stop"
-                class="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
-              >
-                {#if isWorking(svc.name, 'stop')}<RefreshCw size={12} class="animate-spin" />
-                {:else}<Square size={12} />{/if}
-              </button>
-              <button
-                onclick={() => act(svc.name, 'restart')}
-                disabled={working !== null}
-                aria-label="Restart {svc.name}"
-                title="Restart"
-                class="p-1.5 rounded hover:bg-secondary text-muted-foreground transition-colors disabled:opacity-40"
-              >
-                {#if isWorking(svc.name, 'restart')}<RefreshCw size={12} class="animate-spin" />
-                {:else}<RotateCcw size={12} />{/if}
-              </button>
-            {:else}
-              <button
-                onclick={() => act(svc.name, 'start')}
-                disabled={working !== null}
-                aria-label="Start {svc.name}"
-                title="Start"
-                class="p-1.5 rounded hover:bg-secondary text-muted-foreground hover:text-green-400 transition-colors disabled:opacity-40"
-              >
-                {#if isWorking(svc.name, 'start')}<RefreshCw size={12} class="animate-spin" />
-                {:else}<Play size={12} />{/if}
-              </button>
-            {/if}
-          </div>
-        </div>
-      {/each}
-
-      {#if filtered.length === 0}
-        <div class="px-4 py-8 text-center text-sm text-muted-foreground">
-          {query ? 'No services match your search' : 'No services found'}
-        </div>
-      {/if}
-    </div>
-
-    <p class="text-xs text-muted-foreground text-right">
-      Showing {filtered.length} of {services.length} services
-    </p>
-
+      <p class="text-xs text-muted-foreground text-right">
+        Showing {filtered.length} of {services.length} services
+      </p>
+    {/if}
   </div>
-{/if}
+
+  <ConfirmDialog
+    open={pendingUnit !== null}
+    onOpenChange={(open) => { if (!open) pendingUnit = null }}
+    title="{pendingUnit ? pendingUnit.action[0].toUpperCase() + pendingUnit.action.slice(1) : ''} {pendingUnit?.svc.name ?? ''}?"
+    description="This unit is critical to the desktop session or network. Interrupting it can drop your session, network, or remote access."
+    busy={!!pendingUnit && !!actioning[pendingUnit.svc.name]}
+    actions={[
+      { label: 'Cancel', variant: 'secondary', onClick: () => { pendingUnit = null } },
+      { label: pendingUnit ? pendingUnit.action[0].toUpperCase() + pendingUnit.action.slice(1) : 'Continue', variant: 'destructive', onClick: () => act(pendingUnit!.svc, pendingUnit!.action) },
+    ]}
+  />
+</Page>

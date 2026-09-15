@@ -4,9 +4,10 @@
   import { fade } from 'svelte/transition'
   import { invoke } from '$lib/utils'
   import { toasts } from '$stores/toasts'
-  import { RefreshCw, X, AlertTriangle, Search } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { reduceEffects } from '$stores/theme'
+  import { Page, Card, Skeleton, Button, SegmentedControl, SearchField, ConfirmDialog, EmptyState } from '$ui'
+  import { RefreshCw, X, CircleX } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   let { visible = true }: { visible?: boolean } = $props()
 
@@ -15,6 +16,13 @@
     vsz: number; rss: number; stat: string; command: string; name: string
   }
 
+  const TITLE = 'Processes'
+  const GRID = 'grid-cols-[minmax(12rem,1fr)_5rem_5rem_6rem_2.75rem]'
+  const SORT_OPTIONS: { value: 'cpu' | 'mem'; label: string }[] = [
+    { value: 'cpu', label: 'CPU' },
+    { value: 'mem', label: 'Memory' },
+  ]
+
   let procs = $state<Process[]>([])
   let loading = $state(true)
   let refreshing = $state(false)
@@ -22,7 +30,7 @@
   let sortBy = $state<'cpu' | 'mem'>('cpu')
   let query  = $state('')
   let killing = $state<number | null>(null)
-  let confirmKill = $state<{ pid: number; name: string; signal: 'TERM' | 'KILL' } | null>(null)
+  let confirmKill = $state<{ pid: number; name: string } | null>(null)
   let interval: ReturnType<typeof setInterval> | undefined
 
   // On background polls, update values in place and keep row order stable —
@@ -56,30 +64,28 @@
 
   async function killProc(pid: number, signal: 'TERM' | 'KILL') {
     killing = pid
-    confirmKill = null
     try {
       await invoke('processes:kill', pid, signal)
-      toasts.success(`Sent ${signal === 'KILL' ? 'SIGKILL' : 'SIGTERM'} to PID ${pid}`, 'Processes')
+      toasts.success(`Sent ${signal === 'KILL' ? 'SIGKILL' : 'SIGTERM'} to PID ${pid}`, TITLE)
+      confirmKill = null
       await load(true)
     } catch (e) {
-      const msg = String(e)
-      error = msg
-      toasts.error(msg, 'Processes')
+      toasts.error(String(e), TITLE)
     }
     finally { killing = null }
   }
 
   function cpuBar(pct: number): string {
-    if (pct >= 50) return 'bg-red-500'
-    if (pct >= 20) return 'bg-yellow-500'
+    if (pct >= 50) return 'bg-status-fail'
+    if (pct >= 20) return 'bg-status-warn'
     if (pct >= 5)  return 'bg-primary'
     return 'bg-primary/40'
   }
 
   function memBar(pct: number): string {
-    if (pct >= 10) return 'bg-red-500'
-    if (pct >= 5)  return 'bg-yellow-500'
-    return 'bg-blue-500'
+    if (pct >= 10) return 'bg-status-fail'
+    if (pct >= 5)  return 'bg-status-warn'
+    return 'bg-primary'
   }
 
   function fmt(bytes: number): string {
@@ -114,156 +120,155 @@
   onDestroy(() => clearInterval(interval))
 </script>
 
-<!-- Kill confirm dialog -->
-{#if confirmKill}
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-    <div class="bg-card border border-border rounded-xl p-5 space-y-4 max-w-sm w-full mx-4 shadow-xl">
-      <div class="flex items-center gap-3">
-        <div class="p-2 rounded-lg bg-destructive/10 text-destructive">
-          <AlertTriangle size={18} />
-        </div>
-        <div>
-          <p class="text-sm font-medium">Kill process?</p>
-          <p class="text-xs text-muted-foreground">{confirmKill.name} (PID {confirmKill.pid})</p>
-        </div>
-      </div>
-      <div class="flex gap-2">
-        <button
-          onclick={() => killProc(confirmKill!.pid, confirmKill!.signal)}
-          class="flex-1 px-3 py-2 rounded-md text-sm font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-        >
-          {confirmKill.signal === 'KILL' ? 'Force Kill (SIGKILL)' : 'Terminate (SIGTERM)'}
-        </button>
-        <button
-          onclick={() => confirmKill = null}
-          class="px-3 py-2 rounded-md text-sm bg-secondary hover:bg-secondary/80 transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh processes"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-<!-- Loading -->
-{#if loading}
-  <Spinner />
-
-{:else}
-  <div class="space-y-3 max-w-2xl">
-
+  <div class="space-y-3">
     <!-- Controls -->
     <div class="flex items-center gap-2">
-      <!-- Search -->
-      <div class="relative flex-1">
-        <Search size={13} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-        <input
-          bind:value={query}
-          placeholder="Filter by name, command or PID…"
-          class="w-full pl-8 pr-3 py-1.5 rounded-md border border-border bg-secondary/50
-                 text-sm placeholder:text-muted-foreground/50 focus:outline-none"
-        />
-      </div>
-      <!-- Sort toggle -->
-      <div class="flex rounded-md border border-border overflow-hidden text-xs shrink-0">
-        {#each (['cpu', 'mem'] as const) as s}
-          <button
-            onclick={() => sortBy = s}
-            class="px-3 py-1.5 capitalize transition-colors
-                   {sortBy === s ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary text-muted-foreground'}"
-          >
-            {s === 'cpu' ? 'CPU' : 'Memory'}
-          </button>
-        {/each}
-      </div>
-      <!-- Refresh -->
-      <button
-        onclick={() => load(true)}
-        disabled={refreshing}
-        aria-label="Refresh"
-        class="p-1.5 rounded-md hover:bg-secondary text-muted-foreground disabled:opacity-50 shrink-0"
-      >
-        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
-      </button>
+      <SearchField
+        value={query}
+        placeholder="Filter by name, command or PID…"
+        aria-label="Filter processes"
+        class="flex-1"
+        onChange={(v) => { query = v }}
+      />
+      <SegmentedControl
+        value={sortBy}
+        options={SORT_OPTIONS}
+        ariaLabel="Sort processes by"
+        onChange={(v) => { sortBy = v }}
+      />
     </div>
 
     {#if error}<Alert message={error} />{/if}
 
-    <!-- Table header -->
-    <div class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 px-3 py-1.5 text-xs text-muted-foreground font-medium">
-      <span>Process</span>
-      <span class="text-right">CPU%</span>
-      <span class="text-right">MEM%</span>
-      <span class="text-right">RSS</span>
-      <span></span>
-    </div>
-
-    <!-- Process rows -->
-    <div class="space-y-1">
-      {#each filtered as proc (proc.pid)}
-        <div
-          animate:flip={{ duration: 250 }}
-          transition:fade={{ duration: 150 }}
-          class="grid grid-cols-[1fr_60px_60px_60px_36px] gap-2 items-center
-                    rounded-lg border border-border bg-card px-3 py-2
-                    hover:border-border/80 transition-colors group">
-
-          <!-- Name + PID + bar -->
-          <div class="min-w-0">
-            <div class="flex items-baseline gap-2">
-              <span class="text-sm font-medium truncate" title={proc.command}>{proc.name}</span>
-              <span class="text-[10px] text-muted-foreground shrink-0">PID {proc.pid}</span>
+    {#if loading}
+      <Card padding="none">
+        {#each [0, 1, 2, 3, 4, 5] as i (i)}
+          <div class="grid {GRID} gap-2 items-center px-3 py-3 border-b border-border/60 last:border-0">
+            <div class="space-y-1.5">
+              <Skeleton class="h-3 w-40" />
+              <Skeleton class="h-2 w-24" />
             </div>
-            <div class="flex items-center gap-1 mt-1">
-              <!-- Mini CPU bar -->
-              <div class="h-1 w-16 rounded-full bg-secondary overflow-hidden">
-                <div class="h-full rounded-full {cpuBar(proc.cpu)}" style="width: {Math.min(proc.cpu * 2, 100)}%"></div>
+            <Skeleton class="h-3 w-10 justify-self-end" />
+            <Skeleton class="h-3 w-10 justify-self-end" />
+            <Skeleton class="h-3 w-12 justify-self-end" />
+            <span></span>
+          </div>
+        {/each}
+      </Card>
+    {:else if filtered.length === 0}
+      <EmptyState
+        icon={CircleX}
+        title={query ? 'No processes match' : 'No processes'}
+        message={query ? 'Nothing matches the current filter.' : 'The process list came back empty.'}
+      >
+        {#snippet action()}
+          {#if query}
+            <Button variant="secondary" size="sm" onclick={() => { query = '' }}>Clear filter</Button>
+          {/if}
+        {/snippet}
+      </EmptyState>
+    {:else}
+      <!-- Table header -->
+      <div class="grid {GRID} gap-2 px-3 text-[11px] text-muted-foreground font-semibold uppercase tracking-widest">
+        <span>Process</span>
+        <span class="text-right">CPU%</span>
+        <span class="text-right">MEM%</span>
+        <span class="text-right">RSS</span>
+        <span></span>
+      </div>
+
+      <!-- Process rows -->
+      <div class="space-y-1">
+        {#each filtered as proc (proc.pid)}
+          <div
+            animate:flip={{ duration: $reduceEffects ? 0 : 250 }}
+            transition:fade={{ duration: $reduceEffects ? 0 : 150 }}
+            class="grid {GRID} gap-2 items-center
+                      rounded-lg border border-border bg-card px-3 py-2
+                      hover:border-border/80 transition-colors">
+
+            <!-- Name + PID + bar -->
+            <div class="min-w-0">
+              <div class="flex items-baseline gap-2">
+                <span class="text-[13px] font-medium truncate" title={proc.command}>{proc.name}</span>
+                <span class="text-[11px] text-muted-foreground shrink-0">PID {proc.pid}</span>
               </div>
-              <span class="text-[10px] text-muted-foreground truncate">{proc.user}</span>
+              <div class="flex items-center gap-1.5 mt-1">
+                <div class="h-1 w-16 rounded-full bg-secondary overflow-hidden">
+                  <div class="h-full rounded-full {cpuBar(proc.cpu)}" style="width: {Math.min(proc.cpu * 2, 100)}%"></div>
+                </div>
+                <span class="text-[11px] text-muted-foreground truncate">{proc.user}</span>
+              </div>
+            </div>
+
+            <!-- CPU% -->
+            <span class="text-xs tabular-nums text-right {proc.cpu >= 20 ? 'text-status-warn font-medium' : ''}">
+              {proc.cpu.toFixed(1)}
+            </span>
+
+            <!-- MEM% -->
+            <span class="text-xs tabular-nums text-right {proc.mem >= 5 ? 'text-primary font-medium' : ''}">
+              {proc.mem.toFixed(1)}
+            </span>
+
+            <!-- RSS -->
+            <span class="text-xs tabular-nums text-right text-muted-foreground">
+              {fmt(proc.rss)}
+            </span>
+
+            <!-- Kill — always visible -->
+            <div class="flex justify-end">
+              {#if killing === proc.pid}
+                <RefreshCw size={13} class="animate-spin text-muted-foreground" />
+              {:else}
+                <Button
+                  variant="icon"
+                  size="sm"
+                  aria-label="Stop {proc.name}"
+                  class="hover:text-destructive"
+                  onclick={() => { confirmKill = { pid: proc.pid, name: proc.name } }}
+                >
+                  <X size={13} />
+                </Button>
+              {/if}
             </div>
           </div>
+        {/each}
+      </div>
 
-          <!-- CPU% -->
-          <span class="text-xs tabular-nums text-right {proc.cpu >= 20 ? 'text-yellow-400 font-medium' : ''}">
-            {proc.cpu.toFixed(1)}
-          </span>
-
-          <!-- MEM% -->
-          <span class="text-xs tabular-nums text-right {proc.mem >= 5 ? 'text-blue-400 font-medium' : ''}">
-            {proc.mem.toFixed(1)}
-          </span>
-
-          <!-- RSS -->
-          <span class="text-xs tabular-nums text-right text-muted-foreground">
-            {fmt(proc.rss)}
-          </span>
-
-          <!-- Kill button -->
-          <div class="flex justify-end">
-            {#if killing === proc.pid}
-              <RefreshCw size={13} class="animate-spin text-muted-foreground" />
-            {:else}
-              <button
-                onclick={() => confirmKill = { pid: proc.pid, name: proc.name, signal: 'TERM' }}
-                aria-label="Kill process {proc.name}"
-                class="opacity-100 focus:opacity-100 p-1 rounded hover:bg-destructive/10
-                       hover:text-destructive text-muted-foreground transition-all
-                       sm:opacity-0 sm:group-hover:opacity-100"
-              >
-                <X size={13} />
-              </button>
-            {/if}
-          </div>
-        </div>
-      {/each}
-    </div>
-
-    <p class="text-xs text-muted-foreground text-center">
-      {#if query}
-        {filtered.length} of {procs.length} processes
-      {:else}
-        Top {procs.length} by {sortBy} · refreshes every 4s
-      {/if}
-    </p>
+      <p class="text-xs text-muted-foreground text-center">
+        {#if query}
+          {filtered.length} of {procs.length} processes
+        {:else}
+          Top {procs.length} by {sortBy} · refreshes every 4s
+        {/if}
+      </p>
+    {/if}
   </div>
-{/if}
+
+  <ConfirmDialog
+    open={confirmKill !== null}
+    onOpenChange={(open) => { if (!open) confirmKill = null }}
+    title="Stop {confirmKill?.name ?? ''}?"
+    description="Terminate (SIGTERM) asks the process to exit cleanly. Force kill (SIGKILL) ends it immediately — unsaved work is lost and the process cannot clean up."
+    busy={killing !== null}
+    actions={[
+      { label: 'Cancel', variant: 'secondary', onClick: () => { confirmKill = null } },
+      { label: 'Terminate', variant: 'primary', onClick: () => killProc(confirmKill!.pid, 'TERM') },
+      { label: 'Force kill', variant: 'destructive', onClick: () => killProc(confirmKill!.pid, 'KILL') },
+    ]}
+  />
+</Page>
