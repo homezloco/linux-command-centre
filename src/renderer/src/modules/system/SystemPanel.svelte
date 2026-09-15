@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { Page, Card, Skeleton, Button } from '$ui'
+  import { toasts } from '$stores/toasts'
   import { Cpu, MemoryStick, RefreshCw, Server, Clock, Activity, Layers, Sparkles, Send,
-           CircuitBoard, MonitorPlay, Eye, ChevronDown, Package, Timer, SlidersHorizontal, Check } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+           CircuitBoard, MonitorPlay, Eye, ChevronDown, Timer, SlidersHorizontal, Check } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   let { visible = true }: { visible?: boolean } = $props()
 
@@ -16,10 +17,6 @@
     memory: { total: number; used: number; available: number; swapTotal: number; swapUsed: number }
     load: { one: number; five: number; fifteen: number }
     processes: number
-  }
-
-  type PackageHealth = {
-    upgradable: number; autoremovable: string[]; cacheBytes: number; installedCount: number
   }
 
   type BootTime = {
@@ -53,11 +50,18 @@
   const SPARK_W    = 240
   const SPARK_H    = 40
 
+  const TUNABLES = [
+    { key: 'vm.swappiness',         label: 'Swappiness',         hint: 'Lower favors RAM over swap (0–200)' },
+    { key: 'vm.vfs_cache_pressure', label: 'VFS cache pressure', hint: 'Lower retains filesystem cache longer (0–1000)' },
+  ] as const
+
+  const labelCls = 'text-[11px] text-muted-foreground uppercase tracking-wide'
+  const statCls  = 'rounded-md bg-secondary/40 px-2.5 py-1.5'
+
   let status   = $state<SystemStatus | null>(null)
   let loading  = $state(true)
   let refreshing = $state(false)
   let error    = $state('')
-  let interval: ReturnType<typeof setInterval> | undefined
 
   // rolling history: {cpu, mem} percentages
   let history = $state<{ cpu: number; mem: number }[]>([])
@@ -98,15 +102,6 @@
     finally { memLoading = false }
   }
 
-  // ── Package health (loaded once) ──────────────────────────────────────────
-  let pkgHealth      = $state<PackageHealth | null>(null)
-  let pkgHealthError = $state('')
-
-  async function loadPackageHealth() {
-    try { pkgHealth = await invoke<PackageHealth>('system:packageHealth') }
-    catch (e) { pkgHealthError = String(e) }
-  }
-
   // ── Boot time (loaded once) ───────────────────────────────────────────────
   let bootTime      = $state<BootTime | null>(null)
   let bootTimeError = $state('')
@@ -116,7 +111,7 @@
     catch (e) { bootTimeError = String(e) }
   }
 
-  // ── Kernel tuning (sysctl) ────────────────────────────────────────────────
+  // ── Kernel tuning (sysctl) — Advanced disclosure ──────────────────────────
   let sysctl        = $state<Record<string, number> | null>(null)
   let sysctlDraft    = $state<Record<string, number>>({})
   let sysctlSaving   = $state<string | null>(null)
@@ -127,18 +122,22 @@
     try {
       sysctl = await invoke<Record<string, number>>('system:sysctl')
       sysctlDraft = { ...sysctl }
+      sysctlError = ''
     } catch (e) { sysctlError = String(e) }
   }
 
-  async function saveSysctl(key: string) {
-    sysctlSaving = key; sysctlError = ''; sysctlSaved = null
+  async function saveSysctl(key: string, label: string) {
+    sysctlSaving = key; sysctlSaved = null
+    const value = sysctlDraft[key]
     try {
-      await invoke('system:setSysctl', key, sysctlDraft[key])
+      await invoke('system:setSysctl', key, value)
       await loadSysctl()
       sysctlSaved = key
       setTimeout(() => { if (sysctlSaved === key) sysctlSaved = null }, 2000)
-    } catch (e) { sysctlError = String(e) }
-    finally { sysctlSaving = null }
+      toasts.success(`${label} set to ${value}`, 'System info')
+    } catch (e) {
+      toasts.error(String(e), 'System info')
+    } finally { sysctlSaving = null }
   }
 
   // Build SVG polyline points from a data series (0-100)
@@ -163,14 +162,20 @@
   }
 
   function usageColor(pct: number): string {
-    if (pct >= 90) return 'bg-red-500'
-    if (pct >= 70) return 'bg-yellow-500'
+    if (pct >= 90) return 'bg-status-fail'
+    if (pct >= 70) return 'bg-status-warn'
     return 'bg-primary'
   }
 
+  function usageText(pct: number): string {
+    if (pct >= 90) return 'text-status-fail'
+    if (pct >= 70) return 'text-status-warn'
+    return 'text-foreground/80'
+  }
+
   function sparkColor(pct: number): string {
-    if (pct >= 90) return '#ef4444'
-    if (pct >= 70) return '#eab308'
+    if (pct >= 90) return 'hsl(var(--status-fail))'
+    if (pct >= 70) return 'hsl(var(--status-warn))'
     return 'hsl(var(--primary))'
   }
 
@@ -206,13 +211,15 @@
   }
 
   onMount(() => {
-    load(); loadSpecs(); loadPackageHealth(); loadBootTime(); loadSysctl()
+    void load(); void loadSpecs(); void loadBootTime(); void loadSysctl()
   })
+
+  // Only the active panel polls; history is kept so graphs persist across leave/return.
   $effect(() => {
-    if (!visible) { clearInterval(interval); interval = undefined; return }
-    if (!interval) interval = setInterval(() => load(true), 5000)
+    if (!visible) return
+    const id = setInterval(() => { void load(true) }, 5000)
+    return () => clearInterval(id)
   })
-  onDestroy(() => clearInterval(interval))
 
   // ── AI Diagnostics ──────────────────────────────────────────────────────
   let aiQuery    = $state('')
@@ -240,558 +247,545 @@
   }
 </script>
 
-{#if loading}
-  <Spinner />
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh system status"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-{:else if error}
-  <Alert message={error} />
+  <div class="space-y-4">
+    {#if error}
+      <Alert message={error} />
+    {/if}
 
-{:else if status}
-  {@const memPct = Math.round(status.memory.used / status.memory.total * 100)}
-  {@const cpuHistory = history.map(h => h.cpu)}
-  {@const memHistory = history.map(h => h.mem)}
+    {#if loading}
+      <Skeleton class="h-14 w-full" />
+      <Skeleton class="h-28 w-full" />
+      <div class="grid grid-cols-3 gap-3">
+        {#each [0, 1, 2] as i (i)}
+          <Skeleton class="h-16 w-full" />
+        {/each}
+      </div>
+      <Skeleton class="h-44 w-full" />
+      <Skeleton class="h-32 w-full" />
 
-  <div class="space-y-4 max-w-2xl">
+    {:else if status}
+      {@const memPct = Math.round(status.memory.used / status.memory.total * 100)}
+      {@const cpuHistory = history.map(h => h.cpu)}
+      {@const memHistory = history.map(h => h.mem)}
 
-    <!-- Header banner -->
-    <div class="rounded-xl border border-border bg-card px-4 py-3 flex items-center justify-between">
-      <div class="flex items-center gap-3">
+      <!-- Header banner -->
+      <Card padding="none" class="px-4 py-3 flex items-center gap-3">
         <div class="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
           <Server size={15} />
         </div>
-        <div>
-          <p class="text-sm font-semibold leading-tight">{status.hostname}</p>
+        <div class="min-w-0">
+          <p class="text-[13px] font-semibold leading-tight truncate">{status.hostname}</p>
           <p class="text-xs text-muted-foreground leading-tight">{status.osName}</p>
         </div>
-      </div>
-      <button
-        onclick={() => load(true)}
-        disabled={refreshing}
-        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium
-               text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-      >
-        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
-        Refresh
-      </button>
-    </div>
+      </Card>
 
-    <!-- Machine identity -->
-    {#if specs}
-      <div class="rounded-xl border border-border bg-card p-4">
-        <div class="flex items-start gap-3">
-          <div class="w-8 h-8 rounded-lg bg-secondary text-muted-foreground flex items-center justify-center shrink-0">
-            <CircuitBoard size={15} />
+      <!-- Machine identity -->
+      {#if specs}
+        <Card>
+          <div class="flex items-start gap-3">
+            <div class="w-8 h-8 rounded-lg bg-secondary text-muted-foreground flex items-center justify-center shrink-0">
+              <CircuitBoard size={15} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-[13px] font-medium leading-tight">
+                {specs.vendor} {specs.model}{specs.version && specs.version !== specs.model ? ` (${specs.version})` : ''}
+              </p>
+              <p class="text-xs text-muted-foreground leading-tight mt-0.5">{specs.chassis}</p>
+            </div>
           </div>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium leading-tight">
-              {specs.vendor} {specs.model}{specs.version && specs.version !== specs.model ? ` (${specs.version})` : ''}
-            </p>
-            <p class="text-xs text-muted-foreground leading-tight mt-0.5">{specs.chassis}</p>
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-3 pt-3 border-t border-border/60 text-xs">
-          <div class="flex justify-between gap-2">
-            <span class="text-muted-foreground">Motherboard</span>
-            <span class="font-medium text-right truncate">{specs.board.vendor} {specs.board.name}</span>
-          </div>
-          <div class="flex justify-between gap-2">
-            <span class="text-muted-foreground">BIOS</span>
-            <span class="font-medium text-right truncate">{specs.bios.vendor} {specs.bios.version}</span>
-          </div>
-          {#if specs.family}
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 mt-3 pt-3 border-t border-border/60 text-xs">
             <div class="flex justify-between gap-2">
-              <span class="text-muted-foreground">Family</span>
-              <span class="font-medium text-right truncate">{specs.family}</span>
+              <span class="text-muted-foreground">Motherboard</span>
+              <span class="font-medium text-right truncate">{specs.board.vendor} {specs.board.name}</span>
             </div>
-          {/if}
-          {#if specs.bios.date}
             <div class="flex justify-between gap-2">
-              <span class="text-muted-foreground">BIOS date</span>
-              <span class="font-medium text-right truncate">{specs.bios.date}</span>
+              <span class="text-muted-foreground">BIOS</span>
+              <span class="font-medium text-right truncate">{specs.bios.vendor} {specs.bios.version}</span>
             </div>
-          {/if}
-        </div>
-      </div>
-    {:else if specsError}
-      <Alert message={specsError} />
-    {/if}
-
-    <!-- AI Diagnostics -->
-    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-      <div class="flex items-center gap-2">
-        <div class="p-1.5 rounded-lg bg-primary/10 text-primary">
-          <Sparkles size={14} />
-        </div>
-        <p class="text-sm font-medium">Ask AI why something's off</p>
-      </div>
-
-      <form
-        class="flex items-center gap-2"
-        onsubmit={(e) => { e.preventDefault(); askAi() }}
-      >
-        <input
-          type="text"
-          bind:value={aiQuery}
-          disabled={aiAsking}
-          placeholder="e.g. why is my system running slow?"
-          class="flex-1 min-w-0 text-xs px-3 py-2 rounded-md bg-secondary/40 border border-border
-                 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary
-                 disabled:opacity-50"
-        />
-        <button
-          type="submit"
-          disabled={aiAsking || !aiQuery.trim()}
-          class="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-border
-                 hover:bg-secondary transition-colors disabled:opacity-50 shrink-0"
-        >
-          {#if aiAsking}
-            <RefreshCw size={12} class="animate-spin" />
-          {:else}
-            <Send size={12} />
-          {/if}
-          Ask
-        </button>
-      </form>
-
-      {#if aiError}
-        <Alert message={aiError} />
-      {:else if aiAnswer}
-        <div class="rounded-lg bg-secondary/40 p-3 space-y-2">
-          <p class="text-xs leading-relaxed whitespace-pre-wrap">{aiAnswer}</p>
-          {#if aiTools.length > 0}
-            <div class="flex flex-wrap gap-1.5 pt-1 border-t border-border/60">
-              {#each aiTools as tool}
-                <span class="text-[9px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground/70">{tool}</span>
-              {/each}
-            </div>
-          {/if}
-        </div>
+            {#if specs.family}
+              <div class="flex justify-between gap-2">
+                <span class="text-muted-foreground">Family</span>
+                <span class="font-medium text-right truncate">{specs.family}</span>
+              </div>
+            {/if}
+            {#if specs.bios.date}
+              <div class="flex justify-between gap-2">
+                <span class="text-muted-foreground">BIOS date</span>
+                <span class="font-medium text-right truncate">{specs.bios.date}</span>
+              </div>
+            {/if}
+          </div>
+        </Card>
+      {:else if specsError}
+        <Alert message={specsError} />
       {/if}
-    </div>
 
-    <!-- Info row -->
-    <div class="grid grid-cols-3 gap-3">
-      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-md bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0 mt-0.5">
-          <Layers size={13} />
-        </div>
-        <div class="min-w-0">
-          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Kernel</p>
-          <p class="text-sm font-medium truncate leading-tight mt-0.5">{status.kernel}</p>
-          <p class="text-xs text-muted-foreground">{status.arch}</p>
-        </div>
-      </div>
-      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-md bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0 mt-0.5">
-          <Clock size={13} />
-        </div>
-        <div>
-          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Uptime</p>
-          <p class="text-sm font-medium leading-tight mt-0.5">{uptimeStr(status.uptime)}</p>
-        </div>
-      </div>
-      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-md bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
-          <Activity size={13} />
-        </div>
-        <div>
-          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Processes</p>
-          <p class="text-sm font-medium leading-tight mt-0.5">{status.processes}</p>
-          <p class="text-xs text-muted-foreground">running</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- CPU -->
-    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-primary/10 text-primary">
-            <Cpu size={16} />
+      <!-- Info row -->
+      <div class="grid grid-cols-3 gap-3">
+        <Card padding="sm" class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-md bg-violet-500/10 text-violet-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Layers size={13} />
+          </div>
+          <div class="min-w-0">
+            <p class={labelCls}>Kernel</p>
+            <p class="text-[13px] font-medium truncate leading-tight mt-0.5">{status.kernel}</p>
+            <p class="text-xs text-muted-foreground">{status.arch}</p>
+          </div>
+        </Card>
+        <Card padding="sm" class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-md bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Clock size={13} />
           </div>
           <div>
-            <p class="text-sm font-medium truncate max-w-xs">{status.cpu.model}</p>
-            <p class="text-xs text-muted-foreground">
-              {#if specs}
-                {specs.cpu.vendor ? specs.cpu.vendor + ' · ' : ''}{specs.cpu.sockets > 1 ? `${specs.cpu.sockets} sockets · ` : ''}{specs.cpu.coresPerSocket || status.cpu.cores} cores · {specs.cpu.totalThreads || status.cpu.cores} threads
-              {:else}
-                {status.cpu.cores} logical cores
+            <p class={labelCls}>Uptime</p>
+            <p class="text-[13px] font-medium leading-tight mt-0.5">{uptimeStr(status.uptime)}</p>
+          </div>
+        </Card>
+        <Card padding="sm" class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-md bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Activity size={13} />
+          </div>
+          <div>
+            <p class={labelCls}>Processes</p>
+            <p class="text-[13px] font-medium leading-tight mt-0.5">{status.processes}</p>
+            <p class="text-xs text-muted-foreground">running</p>
+          </div>
+        </Card>
+      </div>
+
+      <!-- CPU -->
+      <Card class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
+              <Cpu size={16} />
+            </div>
+            <div class="min-w-0">
+              <p class="text-[13px] font-medium truncate">{status.cpu.model}</p>
+              <p class="text-xs text-muted-foreground">
+                {#if specs}
+                  {specs.cpu.vendor ? specs.cpu.vendor + ' · ' : ''}{specs.cpu.sockets > 1 ? `${specs.cpu.sockets} sockets · ` : ''}{specs.cpu.coresPerSocket || status.cpu.cores} cores · {specs.cpu.totalThreads || status.cpu.cores} threads
+                {:else}
+                  {status.cpu.cores} logical cores
+                {/if}
+              </p>
+            </div>
+          </div>
+          <span class="text-2xl font-semibold tabular-nums shrink-0">{status.cpu.usage}%</span>
+        </div>
+
+        {#if specs}
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div class={statCls}>
+              <p class={labelCls}>Base / Max</p>
+              <p class="text-xs font-medium tabular-nums mt-0.5">{fmtGhz(specs.cpu.minMhz)} – {fmtGhz(specs.cpu.maxMhz)}</p>
+            </div>
+            <div class={statCls}>
+              <p class={labelCls}>L2 / L3 Cache</p>
+              <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l2)} / {fmtCache(specs.cpu.caches.l3)}</p>
+            </div>
+            <div class={statCls}>
+              <p class={labelCls}>L1 Cache</p>
+              <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l1d)} d / {fmtCache(specs.cpu.caches.l1i)} i</p>
+            </div>
+            <div class={statCls}>
+              <p class={labelCls}>Virtualization</p>
+              <p class="text-xs font-medium mt-0.5">{specs.cpu.virtualization || 'Not detected'}</p>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Sparkline -->
+        {#if cpuHistory.length >= 2}
+          <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
+            <svg
+              viewBox="0 0 {SPARK_W} {SPARK_H}"
+              preserveAspectRatio="none"
+              class="absolute inset-0 w-full h-full"
+              aria-hidden="true"
+            >
+              <path d={sparkArea(cpuHistory)} fill={sparkColor(status.cpu.usage)} opacity="0.15" />
+              <polyline
+                points={sparkPoints(cpuHistory)}
+                fill="none"
+                stroke={sparkColor(status.cpu.usage)}
+                stroke-width="1.5"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span class="absolute bottom-1 right-2 text-[11px] text-muted-foreground">5 min</span>
+          </div>
+        {:else}
+          <!-- Progress bar before history builds up -->
+          <div class="h-2 rounded-full bg-secondary overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500 {usageColor(status.cpu.usage)}"
+                 style="width: {status.cpu.usage}%"></div>
+          </div>
+        {/if}
+
+        <!-- Load average -->
+        <div class="grid grid-cols-3 gap-2">
+          {#each [['1m', status.load.one], ['5m', status.load.five], ['15m', status.load.fifteen]] as [label, val] (label)}
+            <div class="{statCls} flex items-center justify-between">
+              <span class="text-[11px] text-muted-foreground">Load {label}</span>
+              <span class="text-xs font-medium tabular-nums">{(val as number).toFixed(2)}</span>
+            </div>
+          {/each}
+        </div>
+
+        <!-- Per-core grid -->
+        {#if status.cpu.coreUsages && status.cpu.coreUsages.length > 0}
+          <div class="border-t border-border pt-3">
+            <p class="{labelCls} font-medium mb-2">Per-core</p>
+            <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fill, minmax(58px, 1fr))">
+              {#each status.cpu.coreUsages as pct, i (i)}
+                <div class="rounded-md bg-secondary/40 p-1.5 space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[11px] text-muted-foreground font-medium">C{i}</span>
+                    <span class="text-[11px] font-semibold tabular-nums {usageText(pct)}">{pct}%</span>
+                  </div>
+                  <div class="h-[3px] rounded-full bg-secondary overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500 {usageColor(pct)}"
+                         style="width: {pct}%"></div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </Card>
+
+      <!-- Graphics -->
+      {#if specs && specs.gpus.length > 0}
+        <Card class="space-y-2.5">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="p-2 rounded-lg bg-primary/10 text-primary">
+                <MonitorPlay size={16} />
+              </div>
+              <p class="text-[13px] font-medium">Graphics</p>
+            </div>
+            {#if status.gpu && status.gpu.busyPct != null}
+              <span class="text-2xl font-semibold tabular-nums">{status.gpu.busyPct}%</span>
+            {/if}
+          </div>
+
+          {#if status.gpu && status.gpu.busyPct != null}
+            <div class="h-2 rounded-full bg-secondary overflow-hidden">
+              <div class="h-full rounded-full transition-all duration-500 {usageColor(status.gpu.busyPct)}"
+                   style="width: {status.gpu.busyPct}%"></div>
+            </div>
+            <div class="flex justify-between text-[11px] text-muted-foreground">
+              <span>{status.gpu.vendor} GPU</span>
+              {#if status.gpu.curMhz}
+                <span>{status.gpu.curMhz} / {status.gpu.maxMhz} MHz</span>
               {/if}
-            </p>
-          </div>
-        </div>
-        <span class="text-2xl font-semibold tabular-nums">{status.cpu.usage}%</span>
-      </div>
+              {#if status.gpu.memUsed != null && status.gpu.memTotal != null}
+                <span>{fmt(status.gpu.memUsed)} / {fmt(status.gpu.memTotal)} VRAM</span>
+              {/if}
+            </div>
+          {/if}
 
-      {#if specs}
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Base / Max</p>
-            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtGhz(specs.cpu.minMhz)} – {fmtGhz(specs.cpu.maxMhz)}</p>
-          </div>
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">L2 / L3 Cache</p>
-            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l2)} / {fmtCache(specs.cpu.caches.l3)}</p>
-          </div>
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">L1 Cache</p>
-            <p class="text-xs font-medium tabular-nums mt-0.5">{fmtCache(specs.cpu.caches.l1d)} d / {fmtCache(specs.cpu.caches.l1i)} i</p>
-          </div>
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Virtualization</p>
-            <p class="text-xs font-medium mt-0.5">{specs.cpu.virtualization || 'Not detected'}</p>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Sparkline -->
-      {#if cpuHistory.length >= 2}
-        <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
-          <svg
-            viewBox="0 0 {SPARK_W} {SPARK_H}"
-            preserveAspectRatio="none"
-            class="absolute inset-0 w-full h-full"
-          >
-            <path d={sparkArea(cpuHistory)} fill={sparkColor(status.cpu.usage)} opacity="0.15" />
-            <polyline
-              points={sparkPoints(cpuHistory)}
-              fill="none"
-              stroke={sparkColor(status.cpu.usage)}
-              stroke-width="1.5"
-              stroke-linejoin="round"
-              stroke-linecap="round"
-            />
-          </svg>
-          <span class="absolute bottom-1 right-2 text-[9px] text-muted-foreground/60">5 min</span>
-        </div>
-      {:else}
-        <!-- Progress bar before history builds up -->
-        <div class="h-2 rounded-full bg-secondary overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-500 {usageColor(status.cpu.usage)}"
-               style="width: {status.cpu.usage}%"></div>
-        </div>
-      {/if}
-
-      <!-- Load average -->
-      <div class="grid grid-cols-3 gap-2">
-        {#each [['1m', status.load.one], ['5m', status.load.five], ['15m', status.load.fifteen]] as [label, val]}
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5 flex items-center justify-between">
-            <span class="text-[10px] text-muted-foreground">Load {label}</span>
-            <span class="text-xs font-medium tabular-nums">{(val as number).toFixed(2)}</span>
-          </div>
-        {/each}
-      </div>
-
-      <!-- Per-core grid -->
-      {#if status.cpu.coreUsages && status.cpu.coreUsages.length > 0}
-        <div class="border-t border-border pt-3">
-          <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-2">Per-core</p>
-          <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fill, minmax(58px, 1fr))">
-            {#each status.cpu.coreUsages as pct, i}
-              <div class="rounded-md bg-secondary/40 p-1.5 space-y-1.5">
-                <div class="flex items-center justify-between">
-                  <span class="text-[9px] text-muted-foreground/60 font-medium">C{i}</span>
-                  <span class="text-[10px] font-semibold tabular-nums {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-yellow-400' : 'text-foreground/80'}">{pct}%</span>
-                </div>
-                <div class="h-[3px] rounded-full bg-secondary overflow-hidden">
-                  <div class="h-full rounded-full transition-all duration-500 {pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-yellow-500' : 'bg-primary'}"
-                       style="width: {pct}%"></div>
-                </div>
+          <div class="space-y-1.5">
+            {#each specs.gpus as gpu, i (i)}
+              <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
+                <span class="text-xs font-medium truncate">{gpu.description}</span>
+                {#if gpu.driver}
+                  <span class="text-[11px] font-mono text-muted-foreground shrink-0">{gpu.driver}</span>
+                {/if}
               </div>
             {/each}
           </div>
-        </div>
+        </Card>
       {/if}
-    </div>
 
-    <!-- Graphics -->
-    {#if specs && specs.gpus.length > 0}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-2.5">
+      <!-- Memory -->
+      <Card class="space-y-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <div class="p-2 rounded-lg bg-primary/10 text-primary">
-              <MonitorPlay size={16} />
-            </div>
-            <p class="text-sm font-medium">Graphics</p>
-          </div>
-          {#if status.gpu && status.gpu.busyPct != null}
-            <span class="text-2xl font-semibold tabular-nums">{status.gpu.busyPct}%</span>
-          {/if}
-        </div>
-
-        {#if status.gpu && status.gpu.busyPct != null}
-          <div class="h-2 rounded-full bg-secondary overflow-hidden">
-            <div class="h-full rounded-full transition-all duration-500 {usageColor(status.gpu.busyPct)}"
-                 style="width: {status.gpu.busyPct}%"></div>
-          </div>
-          <div class="flex justify-between text-[10px] text-muted-foreground">
-            <span>{status.gpu.vendor} GPU</span>
-            {#if status.gpu.curMhz}
-              <span>{status.gpu.curMhz} / {status.gpu.maxMhz} MHz</span>
-            {/if}
-            {#if status.gpu.memUsed != null && status.gpu.memTotal != null}
-              <span>{fmt(status.gpu.memUsed)} / {fmt(status.gpu.memTotal)} VRAM</span>
-            {/if}
-          </div>
-        {/if}
-
-        <div class="space-y-1.5">
-          {#each specs.gpus as gpu}
-            <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
-              <span class="text-xs font-medium truncate">{gpu.description}</span>
-              {#if gpu.driver}
-                <span class="text-[10px] font-mono text-muted-foreground shrink-0">{gpu.driver}</span>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    <!-- Memory -->
-    <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-primary/10 text-primary">
-            <MemoryStick size={16} />
-          </div>
-          <div>
-            <p class="text-sm font-medium">Memory</p>
-            <p class="text-xs text-muted-foreground">{fmt(status.memory.used)} used of {fmt(status.memory.total)}</p>
-          </div>
-        </div>
-        <span class="text-2xl font-semibold tabular-nums">{memPct}%</span>
-      </div>
-
-      <!-- Sparkline -->
-      {#if memHistory.length >= 2}
-        <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
-          <svg
-            viewBox="0 0 {SPARK_W} {SPARK_H}"
-            preserveAspectRatio="none"
-            class="absolute inset-0 w-full h-full"
-          >
-            <path d={sparkArea(memHistory)} fill={sparkColor(memPct)} opacity="0.15" />
-            <polyline
-              points={sparkPoints(memHistory)}
-              fill="none"
-              stroke={sparkColor(memPct)}
-              stroke-width="1.5"
-              stroke-linejoin="round"
-              stroke-linecap="round"
-            />
-          </svg>
-          <span class="absolute bottom-1 right-2 text-[9px] text-muted-foreground/60">5 min</span>
-        </div>
-      {:else}
-        <div class="h-2 rounded-full bg-secondary overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-500 {usageColor(memPct)}"
-               style="width: {memPct}%"></div>
-        </div>
-      {/if}
-
-      <div class="flex justify-between text-xs text-muted-foreground">
-        <span>{fmt(status.memory.used)} used</span>
-        <span>{fmt(status.memory.available)} available</span>
-      </div>
-
-      <!-- Per-DIMM details (privileged, on demand) -->
-      <div class="border-t border-border pt-3">
-        {#if !memDetails}
-          <button
-            onclick={loadMemoryDetails}
-            disabled={memLoading}
-            class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-          >
-            {#if memLoading}
-              <RefreshCw size={12} class="animate-spin" />
-              Reading memory modules…
-            {:else}
-              <Eye size={12} />
-              Show memory module details
-            {/if}
-          </button>
-          {#if memError}
-            <p class="text-[11px] text-destructive mt-1.5">{memError}</p>
-          {/if}
-        {:else}
-          <div class="flex items-center justify-between mb-2">
-            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide">
-              Memory modules ({memDetails.slotsUsed}{memDetails.slotsTotal ? ` of ${memDetails.slotsTotal}` : ''} slots)
-            </p>
-            <button
-              onclick={() => memDetails = null}
-              class="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <ChevronDown size={11} />
-              Hide
-            </button>
-          </div>
-          {#if memDetails.dimms.length > 0}
-            <div class="space-y-1.5">
-              {#each memDetails.dimms as dimm}
-                <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="text-xs font-medium truncate">{dimm.locator}</p>
-                    <p class="text-[10px] text-muted-foreground truncate">{dimm.manufacturer || 'Unknown'}{dimm.partNumber ? ` · ${dimm.partNumber}` : ''}</p>
-                  </div>
-                  <div class="text-right shrink-0">
-                    <p class="text-xs font-medium tabular-nums">{dimm.size}</p>
-                    <p class="text-[10px] text-muted-foreground">{dimm.type}{dimm.speed ? ` · ${dimm.speed}` : ''}</p>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="text-[11px] text-muted-foreground">No memory module details available</p>
-          {/if}
-        {/if}
-      </div>
-    </div>
-
-    <!-- Swap -->
-    {#if status.memory.swapTotal > 0}
-      {@const swapPct = Math.round(status.memory.swapUsed / status.memory.swapTotal * 100)}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-secondary text-muted-foreground">
-              <Server size={16} />
+              <MemoryStick size={16} />
             </div>
             <div>
-              <p class="text-sm font-medium">Swap</p>
-              <p class="text-xs text-muted-foreground">{fmt(status.memory.swapUsed)} used of {fmt(status.memory.swapTotal)}</p>
+              <p class="text-[13px] font-medium">Memory</p>
+              <p class="text-xs text-muted-foreground">{fmt(status.memory.used)} used of {fmt(status.memory.total)}</p>
             </div>
           </div>
-          <span class="text-2xl font-semibold tabular-nums">{swapPct}%</span>
+          <span class="text-2xl font-semibold tabular-nums">{memPct}%</span>
         </div>
-        <div class="h-2 rounded-full bg-secondary overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-500 {usageColor(swapPct)}"
-               style="width: {swapPct}%"></div>
-        </div>
-      </div>
-    {/if}
 
-    <!-- Boot time -->
-    {#if bootTime}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-primary/10 text-primary">
-              <Timer size={16} />
-            </div>
-            <p class="text-sm font-medium">Boot Time</p>
-          </div>
-          <span class="text-2xl font-semibold tabular-nums">{fmtDur(bootTime.totalSeconds)}</span>
-        </div>
-        <div class="grid grid-cols-4 gap-2">
-          {#each [['Firmware', bootTime.firmware], ['Loader', bootTime.loader], ['Kernel', bootTime.kernel], ['Userspace', bootTime.userspace]] as [label, val]}
-            <div class="rounded-md bg-secondary/40 px-2 py-1.5 text-center">
-              <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">{label}</p>
-              <p class="text-xs font-medium tabular-nums mt-0.5">{fmtDur(val as number | null)}</p>
-            </div>
-          {/each}
-        </div>
-        {#if bootTime.slowest.length > 0}
-          <div class="border-t border-border pt-3">
-            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-2">Slowest starting units</p>
-            <div class="space-y-1">
-              {#each bootTime.slowest.slice(0, 5) as unit}
-                <div class="flex items-center justify-between text-xs">
-                  <span class="text-muted-foreground truncate">{unit.unit}</span>
-                  <span class="font-medium tabular-nums shrink-0 ml-2">{unit.time}</span>
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {:else if bootTimeError}
-      <Alert message={bootTimeError} />
-    {/if}
-
-    <!-- Package health -->
-    {#if pkgHealth}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-primary/10 text-primary">
-            <Package size={16} />
-          </div>
-          <p class="text-sm font-medium">Package Health</p>
-        </div>
-        <div class="grid grid-cols-3 gap-2">
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Installed</p>
-            <p class="text-sm font-medium tabular-nums mt-0.5">{pkgHealth.installedCount}</p>
-          </div>
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Upgradable</p>
-            <p class="text-sm font-medium tabular-nums mt-0.5">{pkgHealth.upgradable}</p>
-          </div>
-          <div class="rounded-md bg-secondary/40 px-2.5 py-1.5">
-            <p class="text-[9px] text-muted-foreground/70 uppercase tracking-wide">Cache size</p>
-            <p class="text-sm font-medium tabular-nums mt-0.5">{fmt(pkgHealth.cacheBytes)}</p>
-          </div>
-        </div>
-        {#if pkgHealth.autoremovable.length > 0}
-          <div class="border-t border-border pt-3">
-            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wide mb-1.5">
-              {pkgHealth.autoremovable.length} package{pkgHealth.autoremovable.length === 1 ? '' : 's'} no longer needed
-            </p>
-            <p class="text-[11px] text-muted-foreground leading-relaxed">{pkgHealth.autoremovable.join(', ')}</p>
-          </div>
-        {/if}
-      </div>
-    {:else if pkgHealthError}
-      <Alert message={pkgHealthError} />
-    {/if}
-
-    <!-- Kernel tuning -->
-    {#if sysctl}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-primary/10 text-primary">
-            <SlidersHorizontal size={16} />
-          </div>
-          <p class="text-sm font-medium">Kernel Tuning</p>
-        </div>
-        <div class="space-y-2.5">
-          {#each [
-            { key: 'vm.swappiness', label: 'Swappiness', hint: 'Lower favors RAM over swap (0–200)' },
-            { key: 'vm.vfs_cache_pressure', label: 'VFS cache pressure', hint: 'Lower retains filesystem cache longer (0–1000)' }
-          ] as tunable}
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <p class="text-xs font-medium">{tunable.label}</p>
-                <p class="text-[10px] text-muted-foreground">{tunable.hint}</p>
-              </div>
-              <input
-                type="number"
-                min="0"
-                bind:value={sysctlDraft[tunable.key]}
-                class="w-16 px-2 py-1 rounded-md border border-border bg-secondary/50 text-xs font-mono text-right focus:outline-none"
+        <!-- Sparkline -->
+        {#if memHistory.length >= 2}
+          <div class="relative h-10 w-full overflow-hidden rounded-md bg-secondary/40">
+            <svg
+              viewBox="0 0 {SPARK_W} {SPARK_H}"
+              preserveAspectRatio="none"
+              class="absolute inset-0 w-full h-full"
+              aria-hidden="true"
+            >
+              <path d={sparkArea(memHistory)} fill={sparkColor(memPct)} opacity="0.15" />
+              <polyline
+                points={sparkPoints(memHistory)}
+                fill="none"
+                stroke={sparkColor(memPct)}
+                stroke-width="1.5"
+                stroke-linejoin="round"
+                stroke-linecap="round"
               />
-              <button
-                onclick={() => saveSysctl(tunable.key)}
-                disabled={sysctlSaving === tunable.key || sysctlDraft[tunable.key] === sysctl?.[tunable.key]}
-                class="shrink-0 px-2.5 py-1 rounded-md bg-secondary text-xs font-medium hover:bg-secondary/80 disabled:opacity-50 transition-colors flex items-center gap-1"
-              >
-                {#if sysctlSaving === tunable.key}
-                  <RefreshCw size={11} class="animate-spin" />
-                {:else if sysctlSaved === tunable.key}
-                  <Check size={11} class="text-green-400" />
-                {:else}
-                  Apply
-                {/if}
-              </button>
-            </div>
-          {/each}
-        </div>
-        {#if sysctlError}
-          <Alert message={sysctlError} />
+            </svg>
+            <span class="absolute bottom-1 right-2 text-[11px] text-muted-foreground">5 min</span>
+          </div>
+        {:else}
+          <div class="h-2 rounded-full bg-secondary overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500 {usageColor(memPct)}"
+                 style="width: {memPct}%"></div>
+          </div>
         {/if}
-      </div>
-    {/if}
 
+        <div class="flex justify-between text-xs text-muted-foreground">
+          <span>{fmt(status.memory.used)} used</span>
+          <span>{fmt(status.memory.available)} available</span>
+        </div>
+
+        <!-- Per-DIMM details (privileged, on demand) -->
+        <div class="border-t border-border pt-3">
+          {#if !memDetails}
+            <Button
+              variant="ghost"
+              size="sm"
+              class="-ml-2.5 text-muted-foreground hover:text-foreground"
+              disabled={memLoading}
+              onclick={loadMemoryDetails}
+            >
+              {#if memLoading}
+                <RefreshCw size={12} class="animate-spin" />
+                Reading memory modules…
+              {:else}
+                <Eye size={12} />
+                Show memory module details
+              {/if}
+            </Button>
+            {#if memError}
+              <p class="text-[11px] text-destructive mt-1.5">{memError}</p>
+            {/if}
+          {:else}
+            <div class="flex items-center justify-between mb-2">
+              <p class="{labelCls} font-medium">
+                Memory modules ({memDetails.slotsUsed}{memDetails.slotsTotal ? ` of ${memDetails.slotsTotal}` : ''} slots)
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="text-muted-foreground hover:text-foreground"
+                onclick={() => memDetails = null}
+              >
+                <ChevronDown size={11} />
+                Hide
+              </Button>
+            </div>
+            {#if memDetails.dimms.length > 0}
+              <div class="space-y-1.5">
+                {#each memDetails.dimms as dimm, i (i)}
+                  <div class="rounded-md bg-secondary/40 px-3 py-2 flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium truncate">{dimm.locator}</p>
+                      <p class="text-[11px] text-muted-foreground truncate">{dimm.manufacturer || 'Unknown'}{dimm.partNumber ? ` · ${dimm.partNumber}` : ''}</p>
+                    </div>
+                    <div class="text-right shrink-0">
+                      <p class="text-xs font-medium tabular-nums">{dimm.size}</p>
+                      <p class="text-[11px] text-muted-foreground">{dimm.type}{dimm.speed ? ` · ${dimm.speed}` : ''}</p>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-[11px] text-muted-foreground">No memory module details available</p>
+            {/if}
+          {/if}
+        </div>
+      </Card>
+
+      <!-- Swap -->
+      {#if status.memory.swapTotal > 0}
+        {@const swapPct = Math.round(status.memory.swapUsed / status.memory.swapTotal * 100)}
+        <Card class="space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="p-2 rounded-lg bg-secondary text-muted-foreground">
+                <Server size={16} />
+              </div>
+              <div>
+                <p class="text-[13px] font-medium">Swap</p>
+                <p class="text-xs text-muted-foreground">{fmt(status.memory.swapUsed)} used of {fmt(status.memory.swapTotal)}</p>
+              </div>
+            </div>
+            <span class="text-2xl font-semibold tabular-nums">{swapPct}%</span>
+          </div>
+          <div class="h-2 rounded-full bg-secondary overflow-hidden">
+            <div class="h-full rounded-full transition-all duration-500 {usageColor(swapPct)}"
+                 style="width: {swapPct}%"></div>
+          </div>
+        </Card>
+      {/if}
+
+      <!-- Boot time -->
+      {#if bootTime}
+        <Card class="space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="p-2 rounded-lg bg-primary/10 text-primary">
+                <Timer size={16} />
+              </div>
+              <p class="text-[13px] font-medium">Boot Time</p>
+            </div>
+            <span class="text-2xl font-semibold tabular-nums">{fmtDur(bootTime.totalSeconds)}</span>
+          </div>
+          <div class="grid grid-cols-4 gap-2">
+            {#each [['Firmware', bootTime.firmware], ['Loader', bootTime.loader], ['Kernel', bootTime.kernel], ['Userspace', bootTime.userspace]] as [label, val] (label)}
+              <div class="rounded-md bg-secondary/40 px-2 py-1.5 text-center">
+                <p class={labelCls}>{label}</p>
+                <p class="text-xs font-medium tabular-nums mt-0.5">{fmtDur(val as number | null)}</p>
+              </div>
+            {/each}
+          </div>
+          {#if bootTime.slowest.length > 0}
+            <div class="border-t border-border pt-3">
+              <p class="{labelCls} font-medium mb-2">Slowest starting units</p>
+              <div class="space-y-1">
+                {#each bootTime.slowest.slice(0, 5) as unit, i (i)}
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-muted-foreground truncate">{unit.unit}</span>
+                    <span class="font-medium tabular-nums shrink-0 ml-2">{unit.time}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </Card>
+      {:else if bootTimeError}
+        <Alert message={bootTimeError} />
+      {/if}
+
+      <!-- Advanced — kernel tuning (closed by default) -->
+      {#if sysctl || sysctlError}
+        <Card padding="none">
+          <details class="group">
+            <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none rounded-xl [&::-webkit-details-marker]:hidden">
+              <div class="p-2 rounded-lg bg-secondary text-muted-foreground shrink-0">
+                <SlidersHorizontal size={16} />
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-[13px] font-medium">Advanced — kernel tuning</p>
+                <p class="text-xs text-muted-foreground">sysctl values; applied immediately and persisted in /etc/sysctl.d</p>
+              </div>
+              <ChevronDown size={14} class="text-muted-foreground shrink-0 transition-transform group-open:rotate-180" />
+            </summary>
+            <div class="px-4 pb-4 pt-3 border-t border-border/60 space-y-2.5">
+              {#if sysctlError}
+                <Alert message={sysctlError} />
+              {/if}
+              {#if sysctl}
+                {#each TUNABLES as tunable (tunable.key)}
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 min-w-0">
+                      <label for="sysctl-{tunable.key}" class="text-xs font-medium">{tunable.label}</label>
+                      <p class="text-[11px] text-muted-foreground">{tunable.hint}</p>
+                    </div>
+                    <input
+                      id="sysctl-{tunable.key}"
+                      type="number"
+                      min="0"
+                      bind:value={sysctlDraft[tunable.key]}
+                      class="w-16 px-2 py-1 rounded-md border border-border bg-secondary/50 text-xs font-mono text-right focus:outline-none"
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      class="w-16"
+                      disabled={sysctlSaving === tunable.key || sysctlDraft[tunable.key] === sysctl?.[tunable.key]}
+                      onclick={() => saveSysctl(tunable.key, tunable.label)}
+                    >
+                      {#if sysctlSaving === tunable.key}
+                        <RefreshCw size={11} class="animate-spin" />
+                      {:else if sysctlSaved === tunable.key}
+                        <Check size={11} class="text-status-ok" />
+                      {:else}
+                        Apply
+                      {/if}
+                    </Button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </details>
+        </Card>
+      {/if}
+
+      <!-- AI diagnostics (closed by default, last) -->
+      <Card padding="none">
+        <details class="group">
+          <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none rounded-xl [&::-webkit-details-marker]:hidden">
+            <div class="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
+              <Sparkles size={16} />
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="text-[13px] font-medium">Ask AI why something's off</p>
+              <p class="text-xs text-muted-foreground">Diagnose with live system data</p>
+            </div>
+            <ChevronDown size={14} class="text-muted-foreground shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <div class="px-4 pb-4 pt-3 border-t border-border/60 space-y-3">
+            <form
+              class="flex items-center gap-2"
+              onsubmit={(e) => { e.preventDefault(); askAi() }}
+            >
+              <input
+                type="text"
+                bind:value={aiQuery}
+                disabled={aiAsking}
+                aria-label="Question for AI diagnostics"
+                placeholder="e.g. why is my system running slow?"
+                class="flex-1 min-w-0 text-xs px-3 py-2 rounded-md bg-secondary/40 border border-border
+                       placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary
+                       disabled:opacity-50"
+              />
+              <Button type="submit" variant="secondary" size="sm" loading={aiAsking} disabled={!aiQuery.trim()}>
+                {#if !aiAsking}<Send size={12} />{/if}
+                Ask
+              </Button>
+            </form>
+
+            {#if aiError}
+              <Alert message={aiError} />
+            {:else if aiAnswer}
+              <div class="rounded-lg bg-secondary/40 p-3 space-y-2">
+                <p class="text-xs leading-relaxed whitespace-pre-wrap">{aiAnswer}</p>
+                {#if aiTools.length > 0}
+                  <div class="flex flex-wrap gap-1.5 pt-1 border-t border-border/60">
+                    {#each aiTools as tool (tool)}
+                      <span class="text-[11px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">{tool}</span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </details>
+      </Card>
+    {/if}
   </div>
-{/if}
+</Page>
