@@ -1,16 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { Bluetooth, BluetoothOff, RotateCw, Headphones, Smartphone, Keyboard, Mouse, Speaker, Search, Trash2 } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { Page, Card, Skeleton, Button, Toggle, ConfirmDialog, EmptyState } from '$ui'
+  import { toasts } from '$stores/toasts'
+  import { Bluetooth, BluetoothOff, RefreshCw, Headphones, Smartphone, Keyboard, Mouse, Speaker, Search, Trash2 } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type Device    = { mac: string; name: string; connected: boolean; type: string }
   type BtStatus  = { blocked: boolean; devices: Device[] }
   type Nearby    = { mac: string; name: string; type: string; rssi: number | null }
 
+  const TITLE = 'Bluetooth'
+
   let status    = $state<BtStatus | null>(null)
   let loading   = $state(true)
+  let refreshing = $state(false)
   let toggling  = $state(false)
   let error     = $state('')
 
@@ -18,27 +22,31 @@
   let scanning  = $state(false)
   let scanDone  = $state(false)
   let actingOn  = $state<Set<string>>(new Set())
-  let deviceError = $state<Record<string, string>>({})
-  let confirmingRemove = $state<string | null>(null)
+  let removeTarget = $state<Device | null>(null)
 
-  async function load() {
-    loading = true; error = ''
+  async function load(force = false) {
+    if (force) refreshing = true
+    error = ''
     try { status = await invoke<BtStatus>('bluetooth:status') }
     catch (e) { error = String(e) }
-    finally { loading = false }
+    finally { loading = false; refreshing = false }
   }
 
-  async function toggle() {
-    toggling = true; error = ''
-    try { await invoke('bluetooth:toggle'); await load() }
-    catch (e) { error = String(e) }
+  async function toggleRadio() {
+    toggling = true
+    try {
+      await invoke('bluetooth:toggle')
+      await load(true)
+      toasts.success(status?.blocked ? 'Bluetooth turned off' : 'Bluetooth turned on', TITLE)
+    }
+    catch (e) { toasts.error(String(e), TITLE) }
     finally { toggling = false }
   }
 
   async function scan() {
-    scanning = true; scanDone = false; error = ''; nearby = []
+    scanning = true; scanDone = false; nearby = []
     try { nearby = await invoke<Nearby[]>('bluetooth:scan') }
-    catch (e) { error = String(e) }
+    catch (e) { toasts.error(String(e), TITLE) }
     finally { scanning = false; scanDone = true }
   }
 
@@ -49,64 +57,39 @@
     actingOn = next
   }
 
-  function setDeviceError(mac: string, msg: string) {
-    deviceError = { ...deviceError, [mac]: msg }
-    setTimeout(() => {
-      deviceError = { ...deviceError, [mac]: '' }
-    }, 4000)
-  }
-
-  async function connect(mac: string) {
-    setActing(mac, true)
+  async function deviceOp(
+    channel: 'bluetooth:connect' | 'bluetooth:disconnect' | 'bluetooth:pair' | 'bluetooth:remove',
+    device: { mac: string; name: string },
+    successMsg: string,
+  ): Promise<boolean> {
+    setActing(device.mac, true)
     try {
-      const res = await invoke<{ ok: boolean; error?: string }>('bluetooth:connect', mac)
+      const res = await invoke<{ ok: boolean; error?: string }>(channel, device.mac)
       if (!res.ok) throw new Error(res.error ?? 'Failed')
-      await load()
-    } catch (e) { setDeviceError(mac, String(e)) }
-    finally { setActing(mac, false) }
+      toasts.success(successMsg, TITLE)
+      await load(true)
+      return true
+    } catch (e) {
+      toasts.error(`${device.name || device.mac}: ${String(e)}`, TITLE)
+      return false
+    } finally { setActing(device.mac, false) }
   }
 
-  async function disconnect(mac: string) {
-    setActing(mac, true)
-    try {
-      const res = await invoke<{ ok: boolean; error?: string }>('bluetooth:disconnect', mac)
-      if (!res.ok) throw new Error(res.error ?? 'Failed')
-      await load()
-    } catch (e) { setDeviceError(mac, String(e)) }
-    finally { setActing(mac, false) }
+  const connect    = (d: Device) => deviceOp('bluetooth:connect', d, `Connected ${d.name}`)
+  const disconnect = (d: Device) => deviceOp('bluetooth:disconnect', d, `Disconnected ${d.name}`)
+
+  async function pair(d: Nearby) {
+    const label = d.name || `Unknown ${d.type}`
+    if (await deviceOp('bluetooth:pair', { mac: d.mac, name: label }, `Paired ${label}`)) {
+      nearby = nearby.filter(n => n.mac !== d.mac)
+    }
   }
 
-  async function pair(mac: string) {
-    setActing(mac, true)
-    try {
-      const res = await invoke<{ ok: boolean; error?: string }>('bluetooth:pair', mac)
-      if (!res.ok) throw new Error(res.error ?? 'Pairing failed')
-      nearby = nearby.filter(d => d.mac !== mac)
-      await load()
-    } catch (e) { setDeviceError(mac, String(e)) }
-    finally { setActing(mac, false) }
+  async function remove(d: Device) {
+    if (await deviceOp('bluetooth:remove', d, `Removed ${d.name}`)) removeTarget = null
   }
 
-  function confirmRemove(mac: string) {
-    confirmingRemove = mac
-  }
-
-  function cancelRemove() {
-    confirmingRemove = null
-  }
-
-  async function remove(mac: string) {
-    confirmingRemove = null
-    setActing(mac, true)
-    try {
-      const res = await invoke<{ ok: boolean; error?: string }>('bluetooth:remove', mac)
-      if (!res.ok) throw new Error(res.error ?? 'Failed')
-      await load()
-    } catch (e) { setDeviceError(mac, String(e)) }
-    finally { setActing(mac, false) }
-  }
-
-  onMount(load)
+  onMount(() => { void load() })
 
   function deviceIcon(type: string) {
     const t = type.toLowerCase()
@@ -117,188 +100,182 @@
     if (t.includes('speaker'))  return Speaker
     return Bluetooth
   }
+
+  function rssiBars(rssi: number | null): number | null {
+    if (rssi == null) return null
+    return Math.min(Math.max(Math.round((rssi + 90) / 60 * 4), 0), 4)
+  }
 </script>
 
-{#if loading}
-  <Spinner />
-{:else}
-<div class="max-w-sm space-y-3">
-  {#if status}
+<Page width="narrow">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh devices"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-    <!-- Status + toggle -->
-    <div class="rounded-xl border border-border bg-card p-4">
-      <div class="flex items-center justify-between">
+  <div class="space-y-3">
+    {#if error}
+      <Alert message={error} />
+    {/if}
+
+    {#if loading}
+      <Skeleton class="h-16 w-full" />
+      <Skeleton class="h-40 w-full" />
+      <Skeleton class="h-24 w-full" />
+
+    {:else if status}
+      <!-- Status + radio toggle -->
+      <Card class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-3">
           {#if status.blocked}
             <BluetoothOff size={22} class="text-muted-foreground" />
           {:else}
             <Bluetooth size={22} class="text-primary" />
           {/if}
-          <p class="font-medium">{status.blocked ? 'Disabled' : 'Enabled'}</p>
+          <p class="text-[13px] font-medium" id="bt-radio-label">{status.blocked ? 'Bluetooth is off' : 'Bluetooth is on'}</p>
         </div>
-        <button
-          onclick={toggle} disabled={toggling} aria-label="Toggle Bluetooth"
-          class={`relative w-11 h-6 rounded-full transition-colors disabled:opacity-50 ${status.blocked ? 'bg-secondary' : 'bg-primary'}`}
-        >
-          <span class={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${status.blocked ? '' : 'translate-x-5'}`}></span>
-        </button>
-      </div>
-      {#if error}<div class="mt-2"><Alert message={error} /></div>{/if}
-    </div>
+        <Toggle
+          checked={!status.blocked}
+          disabled={toggling}
+          aria-labelledby="bt-radio-label"
+          onCheckedChange={() => toggleRadio()}
+        />
+      </Card>
 
-    {#if !status.blocked}
-
-      <!-- Paired devices -->
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
-        <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
-          <p class="text-sm font-medium">Paired devices</p>
-          <button onclick={load} class="text-muted-foreground hover:text-foreground transition-colors">
-            <RotateCw size={13} />
-          </button>
-        </div>
-
+      {#if !status.blocked}
+        <!-- Paired devices -->
         {#if status.devices.length === 0}
-          <div class="py-6 text-center text-sm text-muted-foreground">No paired devices</div>
+          <EmptyState icon={Bluetooth} title="No paired devices" message="Put a device in pairing mode, then scan for it.">
+            {#snippet action()}
+              <Button variant="primary" size="sm" loading={scanning} onclick={() => scan()}>
+                <Search size={12} />
+                Scan
+              </Button>
+            {/snippet}
+          </EmptyState>
         {:else}
-          <div class="divide-y divide-border">
-            {#each status.devices as device}
-              {@const Icon = deviceIcon(device.type)}
-              {@const isActing = actingOn.has(device.mac)}
-              {@const err = deviceError[device.mac]}
-              <div class="flex flex-col">
-                <div class="flex items-center gap-3 px-4 py-3">
-                  <Icon size={15} class={device.connected ? 'text-primary' : 'text-muted-foreground'} />
+          <Card padding="none" class="overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-border">
+              <p class="text-[13px] font-medium">Paired devices</p>
+            </div>
+            <div class="divide-y divide-border">
+              {#each status.devices as device (device.mac)}
+                {@const Icon = deviceIcon(device.type)}
+                {@const isActing = actingOn.has(device.mac)}
+                <div class="flex items-center gap-3 px-4 py-2.5">
+                  <Icon size={15} class="shrink-0 {device.connected ? 'text-primary' : 'text-muted-foreground'}" />
                   <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium truncate">{device.name}</p>
+                    <p class="text-[13px] font-medium truncate">{device.name}</p>
                     <p class="text-xs text-muted-foreground font-mono">{device.mac}</p>
                   </div>
                   <div class="flex items-center gap-1.5 shrink-0">
-                    {#if confirmingRemove === device.mac}
-                      <span class="text-xs text-destructive mr-1">Remove?</span>
-                      <button
-                        onclick={() => remove(device.mac)}
-                        disabled={isActing}
-                        class="text-xs px-2 py-1 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
-                      >
-                        Yes
-                      </button>
-                      <button
-                        onclick={cancelRemove}
-                        class="text-xs px-2 py-1 rounded border border-border hover:bg-secondary"
-                      >
-                        No
-                      </button>
+                    {#if device.connected}
+                      <Button variant="secondary" size="sm" loading={isActing} onclick={() => disconnect(device)}>
+                        Disconnect
+                      </Button>
                     {:else}
-                      {#if device.connected}
-                        <button
-                          onclick={() => disconnect(device.mac)}
-                          disabled={isActing}
-                          class="text-xs px-2 py-1 rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
-                        >
-                          {isActing ? '…' : 'Disconnect'}
-                        </button>
-                      {:else}
-                        <button
-                          onclick={() => connect(device.mac)}
-                          disabled={isActing}
-                          class="text-xs px-2 py-1 rounded border border-border hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
-                        >
-                          {isActing ? '…' : 'Connect'}
-                        </button>
-                      {/if}
-                      <button
-                        onclick={() => confirmRemove(device.mac)}
-                        disabled={isActing}
-                        aria-label="Remove device"
-                        class="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50 p-1"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      <Button variant="secondary" size="sm" loading={isActing} onclick={() => connect(device)}>
+                        Connect
+                      </Button>
                     {/if}
+                    <Button
+                      variant="icon"
+                      size="sm"
+                      aria-label="Remove {device.name}"
+                      class="hover:text-destructive"
+                      disabled={isActing}
+                      onclick={() => { removeTarget = device }}
+                    >
+                      <Trash2 size={13} />
+                    </Button>
                   </div>
                 </div>
-                {#if err}
-                  <div class="px-4 pb-2 -mt-1">
-                    <p class="text-xs text-destructive">{err}</p>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          </Card>
         {/if}
-      </div>
 
-      <!-- Scan for new devices -->
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
-        <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
-          <p class="text-sm font-medium">Add new device</p>
-          <button
-            onclick={scan}
-            disabled={scanning}
-            class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors"
-          >
-            <Search size={11} class={scanning ? 'animate-pulse' : ''} />
-            {scanning ? 'Scanning…' : 'Scan'}
-          </button>
-        </div>
-
-        {#if scanning}
-          <div class="py-8 text-center text-sm text-muted-foreground">
-            <p>Scanning for nearby devices…</p>
-            <p class="text-xs mt-1 text-muted-foreground/60">Make sure your device is in pairing mode</p>
+        <!-- Scan for new devices -->
+        <Card padding="none" class="overflow-hidden">
+          <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-border">
+            <p class="text-[13px] font-medium">Add new device</p>
+            <Button variant="primary" size="sm" loading={scanning} onclick={() => scan()}>
+              {#if !scanning}<Search size={11} />{/if}
+              {scanning ? 'Scanning…' : 'Scan'}
+            </Button>
           </div>
-        {:else if nearby.length > 0}
-          <div class="divide-y divide-border">
-            {#each nearby as device}
-              {@const Icon = deviceIcon(device.type)}
-              {@const isActing = actingOn.has(device.mac)}
-              {@const err = deviceError[device.mac]}
-              {@const signal = device.rssi != null ? Math.min(Math.max(Math.round((device.rssi + 90) / 60 * 4), 0), 4) : null}
-              <div class="flex flex-col">
-                <div class="flex items-center gap-3 px-4 py-3">
+
+          {#if scanning}
+            <div class="p-4 space-y-3">
+              {#each [0, 1, 2] as i (i)}
+                <div class="flex items-center gap-3">
+                  <Skeleton class="h-4 w-4 shrink-0" />
+                  <div class="flex-1 space-y-1.5">
+                    <Skeleton class="h-3 w-32" />
+                    <Skeleton class="h-2.5 w-24" />
+                  </div>
+                  <Skeleton class="h-7 w-12" />
+                </div>
+              {/each}
+              <p class="text-xs text-muted-foreground text-center">Make sure your device is in pairing mode</p>
+            </div>
+          {:else if nearby.length > 0}
+            <div class="divide-y divide-border">
+              {#each nearby as device (device.mac)}
+                {@const Icon = deviceIcon(device.type)}
+                {@const isActing = actingOn.has(device.mac)}
+                {@const signal = rssiBars(device.rssi)}
+                <div class="flex items-center gap-3 px-4 py-2.5">
                   <Icon size={15} class="text-muted-foreground shrink-0" />
                   <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium truncate">{device.name || `Unknown ${device.type}`}</p>
+                    <p class="text-[13px] font-medium truncate">{device.name || `Unknown ${device.type}`}</p>
                     <div class="flex items-center gap-2">
                       <p class="text-xs text-muted-foreground font-mono">{device.mac}</p>
                       {#if signal != null}
-                        <div class="flex items-end gap-px h-3">
-                          {#each [1, 2, 3, 4] as bar}
+                        <div class="flex items-end gap-px h-3" aria-hidden="true">
+                          {#each [1, 2, 3, 4] as bar (bar)}
                             <div class="w-1 rounded-sm {bar <= signal ? 'bg-primary' : 'bg-muted'}" style="height: {bar * 3}px"></div>
                           {/each}
                         </div>
                       {/if}
                     </div>
                   </div>
-                  <button
-                    onclick={() => pair(device.mac)}
-                    disabled={isActing}
-                    class="text-xs px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors shrink-0"
-                  >
+                  <Button variant="primary" size="sm" loading={isActing} onclick={() => pair(device)}>
                     {isActing ? 'Pairing…' : 'Pair'}
-                  </button>
+                  </Button>
                 </div>
-                {#if err}
-                  <div class="px-4 pb-2 -mt-1">
-                    <p class="text-xs text-destructive">{err}</p>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {:else if scanDone}
-          <div class="py-6 text-center text-sm text-muted-foreground">
-            <p>No new devices found</p>
-            <p class="text-xs mt-1 text-muted-foreground/60">Put your device in pairing mode and scan again</p>
-          </div>
-        {:else}
-          <div class="py-6 text-center text-sm text-muted-foreground/60">
-            Press Scan to discover nearby devices
-          </div>
-        {/if}
-      </div>
-
+              {/each}
+            </div>
+          {:else if scanDone}
+            <div class="py-6 text-center">
+              <p class="text-[13px] text-muted-foreground">No new devices found</p>
+              <p class="text-xs mt-1 text-muted-foreground">Put your device in pairing mode and scan again</p>
+            </div>
+          {:else}
+            <div class="py-6 text-center text-[13px] text-muted-foreground">
+              Press Scan to discover nearby devices
+            </div>
+          {/if}
+        </Card>
+      {/if}
     {/if}
-  {/if}
-</div>
-{/if}
+  </div>
+
+  <ConfirmDialog
+    open={removeTarget !== null}
+    onOpenChange={(open) => { if (!open) removeTarget = null }}
+    title="Remove {removeTarget?.name ?? 'device'}?"
+    description="The device will be unpaired and forgotten. You will need to pair it again to use it."
+    actions={[
+      { label: 'Cancel', variant: 'secondary', onClick: () => { removeTarget = null } },
+      { label: 'Remove', variant: 'destructive', onClick: () => remove(removeTarget!) },
+    ]}
+  />
+</Page>

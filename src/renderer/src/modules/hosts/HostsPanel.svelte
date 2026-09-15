@@ -1,18 +1,23 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { Page, Card, Skeleton, Button } from '$ui'
+  import { toasts } from '$stores/toasts'
   import { RefreshCw, Plus, Trash2, EyeOff, Eye, AlertTriangle, Save } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type HostEntry = {
     id: string; ip: string; hostname: string; aliases: string
     enabled: boolean; system: boolean; raw: string
   }
 
+  const TITLE = 'Hosts'
+  const inputCls = 'h-8 rounded-md border border-border bg-secondary/50 px-3 text-[13px] font-mono focus:outline-none focus:ring-1 focus:ring-primary'
+
   let raw     = $state('')
   let entries = $state<HostEntry[]>([])
   let loading = $state(true)
+  let refreshing = $state(false)
   let saving  = $state(false)
   let error   = $state('')
   let dirty   = $state(false)
@@ -83,22 +88,24 @@
     return lines.join('\n')
   }
 
-  async function load() {
-    loading = true; error = ''
+  async function load(force = false) {
+    if (force) refreshing = true
+    error = ''
     try {
       raw = await invoke<string>('hosts:read')
       entries = parseHosts(raw)
       dirty = false
     } catch (e) { error = String(e) }
-    finally { loading = false }
+    finally { loading = false; refreshing = false }
   }
 
   async function save() {
-    saving = true; error = ''
+    saving = true
     try {
       await invoke('hosts:write', buildContent())
-      await load()
-    } catch (e) { error = String(e) }
+      toasts.success('/etc/hosts saved', TITLE)
+      await load(true)
+    } catch (e) { toasts.error(String(e), TITLE) }
     finally { saving = false }
   }
 
@@ -133,105 +140,120 @@
     dirty = true
   }
 
-  onMount(() => load())
+  onMount(() => { void load() })
 </script>
 
-{#if loading}
-  <Spinner />
-
-{:else}
-  <div class="space-y-4 max-w-2xl">
-
-    <!-- Header -->
-    <div class="flex items-center justify-between">
-      <h2 class="text-sm font-medium text-muted-foreground">{entries.length} entries</h2>
-      <div class="flex gap-2">
-        <button
-          onclick={() => { showAdd = !showAdd; addError = '' }}
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                 bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          <Plus size={12} /> Add Entry
-        </button>
-        {#if dirty}
-          <button
-            onclick={save}
-            disabled={saving}
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                   bg-green-500 text-white hover:bg-green-600 disabled:opacity-50"
-          >
-            {#if saving}<RefreshCw size={12} class="animate-spin" />{:else}<Save size={12} />{/if}
-            Save
-          </button>
-        {/if}
-      </div>
-    </div>
-
-    <!-- Add form -->
-    {#if showAdd}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3">
-        <p class="text-sm font-medium">New entry</p>
-        <div class="grid grid-cols-3 gap-2">
-          <input bind:value={newIp}       placeholder="IP address"  class="rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-          <input bind:value={newHostname} placeholder="hostname"    class="rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-          <input bind:value={newAliases}  placeholder="aliases (optional)" class="rounded-md border border-border bg-secondary/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
-        {#if addError}<p class="text-xs text-destructive">{addError}</p>{/if}
-        <div class="flex gap-2">
-          <button onclick={addEntry} class="px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90">Add</button>
-          <button onclick={() => showAdd = false} class="px-3 py-1.5 rounded-md text-sm bg-secondary hover:bg-secondary/80">Cancel</button>
-        </div>
-      </div>
-    {/if}
-
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="secondary"
+      size="sm"
+      disabled={loading}
+      onclick={() => { showAdd = !showAdd; addError = '' }}
+    >
+      <Plus size={12} /> Add Entry
+    </Button>
     {#if dirty}
-      <div class="rounded-lg bg-yellow-400/10 border border-yellow-400/30 p-2.5 flex items-center gap-2">
-        <AlertTriangle size={13} class="text-yellow-400 shrink-0" />
-        <p class="text-xs text-yellow-400">Unsaved changes — click Save to write /etc/hosts (requires authentication)</p>
-      </div>
+      <Button variant="primary" size="sm" loading={saving} onclick={save}>
+        {#if !saving}<Save size={12} />{/if}
+        Save
+      </Button>
     {/if}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label={dirty ? 'Discard changes and reload' : 'Reload /etc/hosts'}
+      disabled={refreshing || loading || saving}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
+  <div class="space-y-4">
     {#if error}
       <Alert message={error} />
     {/if}
 
-    <!-- Entries -->
-    <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
-      {#each entries as entry}
-        <div class="flex items-center gap-3 px-4 py-2.5 {entry.enabled ? '' : 'opacity-50'}">
-          <span class="font-mono text-xs w-32 shrink-0 {entry.system ? 'text-muted-foreground' : ''}">{entry.ip}</span>
-          <div class="flex-1 min-w-0">
-            <span class="font-mono text-sm font-medium">{entry.hostname}</span>
-            {#if entry.aliases}
-              <span class="text-xs text-muted-foreground ml-2">{entry.aliases}</span>
+    {#if loading}
+      <Skeleton class="h-3 w-24" />
+      <Card padding="none">
+        {#each [0, 1, 2, 3, 4] as i (i)}
+          <div class="flex items-center gap-3 px-4 py-2.5 border-b border-border/60 last:border-0">
+            <Skeleton class="h-3 w-28 shrink-0" />
+            <Skeleton class="h-3 w-40" />
+          </div>
+        {/each}
+      </Card>
+
+    {:else}
+      <h2 class="text-[13px] font-medium text-muted-foreground">{entries.length} {entries.length === 1 ? 'entry' : 'entries'}</h2>
+
+      <!-- Add form -->
+      {#if showAdd}
+        <Card class="space-y-3">
+          <p class="text-[13px] font-medium">New entry</p>
+          <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); addEntry() }}>
+            <div class="grid grid-cols-3 gap-2">
+              <input bind:value={newIp}       placeholder="IP address"         aria-label="IP address" class={inputCls} />
+              <input bind:value={newHostname} placeholder="hostname"           aria-label="Hostname"   class={inputCls} />
+              <input bind:value={newAliases}  placeholder="aliases (optional)" aria-label="Aliases"    class={inputCls} />
+            </div>
+            {#if addError}<p class="text-xs text-destructive">{addError}</p>{/if}
+            <div class="flex gap-2">
+              <Button type="submit" variant="primary" size="sm">Add</Button>
+              <Button variant="secondary" size="sm" onclick={() => { showAdd = false }}>Cancel</Button>
+            </div>
+          </form>
+        </Card>
+      {/if}
+
+      {#if dirty}
+        <div class="rounded-lg bg-status-warn/10 border border-status-warn/30 p-2.5 flex items-center gap-2">
+          <AlertTriangle size={13} class="text-status-warn shrink-0" />
+          <p class="text-xs text-status-warn">Unsaved changes — click Save to write /etc/hosts (requires authentication)</p>
+        </div>
+      {/if}
+
+      <!-- Entries -->
+      <Card padding="none" class="divide-y divide-border overflow-hidden">
+        {#each entries as entry (entry.id)}
+          <div class="flex items-center gap-3 px-4 py-2 {entry.enabled ? '' : 'opacity-50'}">
+            <span class="font-mono text-xs w-32 shrink-0 truncate {entry.system ? 'text-muted-foreground' : ''}">{entry.ip}</span>
+            <div class="flex-1 min-w-0 truncate">
+              <span class="font-mono text-[13px] font-medium">{entry.hostname}</span>
+              {#if entry.aliases}
+                <span class="text-xs text-muted-foreground ml-2">{entry.aliases}</span>
+              {/if}
+            </div>
+            {#if entry.system}
+              <span class="text-[11px] text-muted-foreground">system</span>
+            {:else}
+              <Button
+                variant="icon"
+                size="sm"
+                aria-label="{entry.enabled ? 'Disable' : 'Enable'} {entry.hostname}"
+                onclick={() => toggleEntry(entry.id)}
+              >
+                {#if entry.enabled}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
+              </Button>
+              <Button
+                variant="icon"
+                size="sm"
+                aria-label="Remove {entry.hostname}"
+                class="hover:text-destructive"
+                onclick={() => removeEntry(entry.id)}
+              >
+                <Trash2 size={13} />
+              </Button>
             {/if}
           </div>
-          {#if entry.system}
-            <span class="text-[10px] text-muted-foreground/50">system</span>
-          {:else}
-            <button
-              onclick={() => toggleEntry(entry.id)}
-              aria-label="{entry.enabled ? 'Disable' : 'Enable'} entry"
-              title="{entry.enabled ? 'Disable' : 'Enable'}"
-              class="p-1.5 rounded hover:bg-secondary text-muted-foreground transition-colors"
-            >
-              {#if entry.enabled}<Eye size={13} />{:else}<EyeOff size={13} />{/if}
-            </button>
-            <button
-              onclick={() => removeEntry(entry.id)}
-              aria-label="Remove entry"
-              class="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-            >
-              <Trash2 size={13} />
-            </button>
-          {/if}
-        </div>
-      {/each}
+        {/each}
 
-      {#if entries.length === 0}
-        <div class="px-4 py-6 text-center text-sm text-muted-foreground">No host entries found</div>
-      {/if}
-    </div>
-
+        {#if entries.length === 0}
+          <div class="px-4 py-6 text-center text-[13px] text-muted-foreground">No host entries found</div>
+        {/if}
+      </Card>
+    {/if}
   </div>
-{/if}
+</Page>
