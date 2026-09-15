@@ -1,108 +1,115 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { RefreshCw, ChevronDown, Check } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { toasts } from '$stores/toasts'
+  import { Page, Card, Skeleton, Button, Listbox, EmptyState } from '$ui'
+  import { RefreshCw, AppWindow } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type AppOption = { id: string; name: string }
   type Category  = { id: string; label: string; current: string; currentName: string; apps: AppOption[] }
 
+  const TITLE = 'Default Apps'
+
   let categories = $state<Category[]>([])
   let loading    = $state(true)
+  let refreshing = $state(false)
   let error      = $state('')
-  let open       = $state<string | null>(null)   // open picker id
   let saving     = $state<string | null>(null)
 
-  async function load() {
-    loading = true; error = ''
+  async function load(force = false) {
+    if (force) refreshing = true
+    error = ''
     try { categories = await invoke<Category[]>('defaultapps:list') }
     catch (e) { error = String(e) }
-    finally { loading = false }
+    finally { loading = false; refreshing = false }
   }
 
-  async function setDefault(categoryId: string, desktopFile: string) {
-    saving = categoryId; open = null
+  async function setDefault(cat: Category, desktopFile: string) {
+    if (desktopFile === cat.current) return
+    saving = cat.id
     try {
-      await invoke('defaultapps:set', categoryId, desktopFile)
-      await load()
-    } catch (e) { error = String(e) }
+      await invoke('defaultapps:set', cat.id, desktopFile)
+      const name = cat.apps.find(a => a.id === desktopFile)?.name ?? desktopFile
+      toasts.success(`${cat.label}: ${name}`, TITLE)
+      await load(true)
+    } catch (e) {
+      toasts.error(String(e), TITLE)
+      await load(true)
+    }
     finally { saving = null }
   }
 
-  onMount(() => load())
+  function optionsFor(cat: Category) {
+    const opts = cat.apps.map(a => ({ value: a.id, label: a.name }))
+    // Keep an unlisted current handler selectable
+    if (cat.current && !opts.some(o => o.value === cat.current)) {
+      opts.unshift({ value: cat.current, label: cat.currentName || cat.current })
+    }
+    return opts
+  }
+
+  onMount(() => { void load() })
 </script>
 
-{#if loading}
-  <Spinner />
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh default apps"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-{:else if error && !categories.length}
-  <Alert message={error} />
-
-{:else}
-  <div class="space-y-1.5 max-w-xl">
-
+  <div class="space-y-3">
     {#if error}
       <Alert message={error} />
     {/if}
 
-    <div class="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
-      {#each categories as cat}
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-sm font-medium w-32 shrink-0">{cat.label}</span>
-
-            <!-- Current / picker trigger -->
-            <button
-              onclick={() => open = open === cat.id ? null : cat.id}
-              disabled={saving === cat.id}
-              class="flex-1 flex items-center justify-between gap-2 px-3 py-1.5 rounded-md
-                     border border-border hover:bg-secondary/50 transition-colors text-sm
-                     {open === cat.id ? 'bg-secondary/50' : ''}"
-            >
-              <span class="truncate {cat.current ? '' : 'text-muted-foreground'}">
-                {cat.currentName || cat.current || 'Not set'}
-              </span>
-              {#if saving === cat.id}
-                <RefreshCw size={13} class="animate-spin text-muted-foreground shrink-0" />
-              {:else}
-                <ChevronDown size={13} class="text-muted-foreground shrink-0 {open === cat.id ? 'rotate-180' : ''}" />
-              {/if}
-            </button>
+    {#if loading}
+      <Card padding="none">
+        {#each [0, 1, 2, 3, 4] as i (i)}
+          <div class="flex items-center gap-3 px-4 py-3 border-b border-border/60 last:border-0">
+            <Skeleton class="h-3 w-28 shrink-0" />
+            <Skeleton class="h-8 flex-1" />
           </div>
+        {/each}
+      </Card>
 
-          <!-- App picker dropdown -->
-          {#if open === cat.id}
-            <div class="mt-2 rounded-lg border border-border bg-secondary/30 overflow-hidden max-h-48 overflow-y-auto">
-              {#if cat.apps.length === 0}
-                <p class="px-3 py-4 text-xs text-muted-foreground text-center">No applications found for this type</p>
+    {:else if categories.length === 0}
+      <EmptyState icon={AppWindow} title="No application categories" message="xdg-mime reported nothing to configure." />
+
+    {:else}
+      <Card padding="none" class="divide-y divide-border overflow-hidden">
+        {#each categories as cat (cat.id)}
+          {@const opts = optionsFor(cat)}
+          <div class="flex items-center justify-between gap-3 px-4 py-2.5">
+            <label for="defaultapp-{cat.id}" class="text-[13px] font-medium w-32 shrink-0">{cat.label}</label>
+            <div class="flex-1 min-w-0">
+              {#if opts.length === 0}
+                <p class="text-xs text-muted-foreground">No applications found for this type</p>
               {:else}
-                {#each cat.apps as app}
-                  <button
-                    onclick={() => setDefault(cat.id, app.id)}
-                    class="w-full flex items-center gap-2 px-3 py-2 text-sm text-left
-                           hover:bg-secondary transition-colors
-                           {cat.current === app.id ? 'text-primary' : ''}"
-                  >
-                    {#if cat.current === app.id}
-                      <Check size={13} class="text-primary shrink-0" />
-                    {:else}
-                      <span class="w-[13px] shrink-0"></span>
-                    {/if}
-                    {app.name}
-                    <span class="text-[10px] text-muted-foreground/60 ml-auto truncate max-w-[180px]">{app.id}</span>
-                  </button>
-                {/each}
+                <Listbox
+                  id="defaultapp-{cat.id}"
+                  value={cat.current}
+                  options={opts}
+                  placeholder="Not set"
+                  disabled={saving === cat.id}
+                  onChange={(v) => setDefault(cat, v)}
+                />
               {/if}
             </div>
-          {/if}
-        </div>
-      {/each}
-    </div>
+          </div>
+        {/each}
+      </Card>
 
-    <p class="text-xs text-muted-foreground px-1">
-      Changes apply immediately via xdg-mime. Some apps may require re-login to take effect.
-    </p>
-
+      <p class="text-xs text-muted-foreground px-1">
+        Changes apply immediately via xdg-mime. Some apps may require re-login to take effect.
+      </p>
+    {/if}
   </div>
-{/if}
+</Page>
