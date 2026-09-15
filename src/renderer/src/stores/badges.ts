@@ -16,6 +16,8 @@ const EMPTY: Badges = {
 }
 
 export const badges = writable<Badges>(EMPTY)
+/** False until the first successful `badge:counts` so Home does not flash “up to date”. */
+export const badgesReady = writable(false)
 
 let interval: ReturnType<typeof setInterval> | undefined
 let started = false
@@ -23,6 +25,7 @@ let started = false
 export async function refreshBadges(): Promise<void> {
   try {
     badges.set(await invoke<Badges>('badge:counts'))
+    badgesReady.set(true)
   } catch { /* non-critical */ }
 }
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
   import { invoke, tempColor } from '$lib/utils'
   import { Page, Card, Skeleton, Button } from '$ui'
-  import { badges } from '$stores/badges'
+  import { badges, badgesReady, refreshBadges } from '$stores/badges'
   import { setActive } from '$stores/nav'
   import Alert from '$lib/Alert.svelte'
   import {
@@ -72,10 +72,6 @@
   let addLabel = $state('')
   let addError = $state('')
   let adding = $state(false)
-
-  let sysInterval: ReturnType<typeof setInterval> | undefined
-  let thermalInterval: ReturnType<typeof setInterval> | undefined
-  let speedInterval: ReturnType<typeof setInterval> | undefined
 
   const hottest = $derived.by(() => {
     const temps = thermal?.temps ?? []
@@ -148,7 +144,7 @@
   async function refresh() {
     refreshing = true
     try {
-      await Promise.all([loadDevice(), loadIssues(true), loadVitals()])
+      await Promise.all([loadDevice(), loadIssues(true), loadVitals(), refreshBadges()])
     } finally { refreshing = false }
   }
 
@@ -256,25 +252,23 @@
 
   onMount(() => {
     void loadDevice().finally(() => { loading = false })
-    void loadVitals().finally(() => { vitalsLoading = false })
     void loadIssues()
   })
 
   $effect(() => {
-    if (!visible) {
-      clearInterval(sysInterval); sysInterval = undefined
-      clearInterval(thermalInterval); thermalInterval = undefined
-      clearInterval(speedInterval); speedInterval = undefined
-      return
+    if (!visible) return
+    void loadVitals().finally(() => { vitalsLoading = false })
+    const sysId = setInterval(() => {
+      void pollSystem()
+      void loadNetStatus()
+    }, 5000)
+    const thermalId = setInterval(() => { void pollThermal() }, 5000)
+    const speedId = setInterval(() => { void pollSpeed() }, 1000)
+    return () => {
+      clearInterval(sysId)
+      clearInterval(thermalId)
+      clearInterval(speedId)
     }
-    if (!sysInterval) sysInterval = setInterval(() => { void pollSystem() }, 5000)
-    if (!thermalInterval) thermalInterval = setInterval(() => { void pollThermal() }, 5000)
-    if (!speedInterval) speedInterval = setInterval(() => { void pollSpeed() }, 1000)
-  })
-  onDestroy(() => {
-    clearInterval(sysInterval)
-    clearInterval(thermalInterval)
-    clearInterval(speedInterval)
   })
 </script>
 
@@ -283,7 +277,7 @@
     <Button
       variant="icon"
       size="sm"
-      aria-label="Refresh device status"
+      aria-label="Refresh dashboard"
       disabled={refreshing}
       onclick={() => refresh()}
     >
@@ -420,14 +414,16 @@
             <div class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <RefreshCw size={12} /> Updates
             </div>
-            <p class="text-xl font-semibold tabular-nums mt-1">{$badges.pendingUpdates}</p>
-            <p class="text-[11px] text-muted-foreground mt-0.5">
-              {$badges.pendingUpdates === 0
-                ? 'up to date'
-                : $badges.pendingUpdates === 1
-                  ? 'package available'
-                  : 'packages available'}
-            </p>
+            <p class="text-xl font-semibold tabular-nums mt-1">{$badgesReady ? $badges.pendingUpdates : '—'}</p>
+            {#if $badgesReady}
+              <p class="text-[11px] text-muted-foreground mt-0.5">
+                {$badges.pendingUpdates === 0
+                  ? 'up to date'
+                  : $badges.pendingUpdates === 1
+                    ? 'package available'
+                    : 'packages available'}
+              </p>
+            {/if}
           </Card>
         </a>
       {/if}
