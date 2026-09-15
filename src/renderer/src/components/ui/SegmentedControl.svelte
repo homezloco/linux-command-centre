@@ -10,9 +10,18 @@
 </script>
 
 <script lang="ts" generics="T extends string">
+  import { tick } from 'svelte'
   import { cn } from '$lib/utils'
 
   let { value, onChange, options, ariaLabel }: SegmentedControlProps<T> = $props()
+
+  let groupEl = $state<HTMLDivElement | undefined>(undefined)
+
+  async function move(next: T) {
+    onChange(next)
+    await tick()
+    groupEl?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')?.focus()
+  }
 
   function onKeydown(e: KeyboardEvent) {
     const enabled = options.filter((o) => !o.disabled)
@@ -20,15 +29,16 @@
     if (i < 0 || enabled.length === 0) return
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
       e.preventDefault()
-      onChange(enabled[(i + 1) % enabled.length].value)
+      void move(enabled[(i + 1) % enabled.length].value)
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
       e.preventDefault()
-      onChange(enabled[(i - 1 + enabled.length) % enabled.length].value)
+      void move(enabled[(i - 1 + enabled.length) % enabled.length].value)
     }
   }
 </script>
 
 <div
+  bind:this={groupEl}
   role="radiogroup"
   aria-label={ariaLabel}
   class="inline-flex rounded-md border border-border bg-secondary/50 p-0.5"

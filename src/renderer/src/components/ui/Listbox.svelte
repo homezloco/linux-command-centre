@@ -32,6 +32,8 @@
   }: ListboxProps<T> = $props()
 
   let searchValue = $state('')
+  let open = $state(false)
+  let inputGen = $state(0)
 
   const selected = $derived(options.find((o) => o.value === value))
   const filtered = $derived(
@@ -39,6 +41,7 @@
       ? options
       : options.filter((o) => o.label.toLowerCase().includes(searchValue.toLowerCase())),
   )
+  const committedLabel = $derived(selected?.label ?? '')
 
   const triggerClass = cn(
     'flex h-8 w-full items-center justify-between gap-2 rounded-md border border-border bg-secondary/50 px-3 text-[13px]',
@@ -60,8 +63,12 @@
     onChange(v as T)
   }
 
-  function handleOpenChange(open: boolean) {
-    if (!open) searchValue = ''
+  function handleOpenChange(next: boolean) {
+    open = next
+    if (!next) {
+      searchValue = ''
+      inputGen += 1
+    }
   }
 </script>
 
@@ -69,6 +76,7 @@
   <Combobox.Root
     type="single"
     {value}
+    {open}
     onValueChange={handleValueChange}
     {disabled}
     allowDeselect={false}
@@ -76,19 +84,30 @@
     onOpenChange={handleOpenChange}
   >
     <div class="relative">
-      <Combobox.Input
-        {id}
-        {placeholder}
-        defaultValue={selected?.label ?? ''}
-        aria-label={ariaLabel}
-        aria-labelledby={ariaLabelledby}
-        oninput={(e) => (searchValue = e.currentTarget.value)}
-        class={cn(triggerClass, 'pr-8')}
-      />
-      <ChevronDown
-        size={14}
-        class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-      />
+      {#key `${committedLabel}:${inputGen}`}
+        <Combobox.Input
+          {id}
+          {placeholder}
+          defaultValue={committedLabel}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledby}
+          onpointerdown={() => {
+            if (!disabled && !open) open = true
+          }}
+          oninput={(e) => {
+            searchValue = e.currentTarget.value
+            if (!open) open = true
+          }}
+          class={cn(triggerClass, 'pr-8')}
+        />
+      {/key}
+      <Combobox.Trigger
+        tabindex={-1}
+        aria-label="Toggle list"
+        class="absolute right-1 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center text-muted-foreground"
+      >
+        <ChevronDown size={14} />
+      </Combobox.Trigger>
     </div>
     <Combobox.Portal to={overlayPortalTarget()}>
       <Combobox.Content

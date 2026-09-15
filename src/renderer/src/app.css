@@ -321,6 +321,8 @@ html[data-reduce-effects] .bg-primary { box-shadow: none !important; }
 
 button.pressable:not(:disabled):active { transform: scale(0.97); }
 
+html[data-reduce-effects] button.pressable:not(:disabled):active { transform: none; }
+
 @media (prefers-reduced-motion: reduce) {
   button.pressable:not(:disabled):active { transform: none; }
 }

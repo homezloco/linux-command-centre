@@ -31,7 +31,7 @@
   aria-labelledby={ariaLabelledby}
   aria-label={ariaLabel}
   class={cn(
-    'peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
+    'inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
     'data-[state=checked]:bg-primary data-[state=unchecked]:bg-secondary data-[state=unchecked]:border-border',
     'disabled:cursor-not-allowed disabled:opacity-50',
   )}
