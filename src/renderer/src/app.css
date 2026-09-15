@@ -50,6 +50,7 @@
     --toggle-thumb: 0 0% 100%;
     --wco-right: 140px;
     --wco-left: 0px;
+    --ui-scale: 1;
   }
 
   /* ── Cyberdeck — high-tech neon HUD ─────────────────────────────────────── */
@@ -262,6 +263,17 @@
 }
 .sidebar-brand {
   padding-left: max(1rem, var(--wco-left));
+}
+
+/* Panel body + #lcc-overlay-root only. Chrome, palette, and Toaster stay 100%.
+   Layout size is divided by --ui-scale so used size × zoom equals the allocation
+   (otherwise the flex pane grows and main clips instead of .page-body scrolling). */
+.page-zoom {
+  zoom: var(--ui-scale, 1);
+  width: calc(100% / var(--ui-scale, 1));
+  height: calc(100% / var(--ui-scale, 1));
+  flex: none;
+  min-height: 0;
 }
 
 /* uPlot font */

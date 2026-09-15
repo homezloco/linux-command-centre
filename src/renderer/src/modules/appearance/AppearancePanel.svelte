@@ -4,8 +4,16 @@
   import { RefreshCw, Palette, Sun, Moon, Monitor, Type, MousePointer2, ImageIcon, Sparkles } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
-  import { theme, THEMES } from '$stores/theme'
+  import { theme, THEMES, uiScale, userReduceFlag, osPrefersReducedMotion, reduceEffects, type UiScale } from '$stores/theme'
   import { appName, DEFAULT_APP_NAME } from '$stores/appName'
+  import { SegmentedControl, type Segment } from '$ui'
+
+  const UI_SCALE_OPTIONS: Segment<UiScale>[] = [
+    { value: '1', label: '100%' },
+    { value: '1.1', label: '110%' },
+    { value: '1.25', label: '125%' },
+    { value: '1.5', label: '150%' },
+  ]
 
   type AppearanceStatus = {
     colorScheme: string; gtkTheme: string; iconTheme: string
@@ -119,6 +127,32 @@
           </button>
         {/each}
       </div>
+
+      <div class="space-y-2 pt-1">
+        <p class="text-[13px] font-medium">Command Centre text size</p>
+        <SegmentedControl
+          value={$uiScale}
+          onChange={(v) => { $uiScale = v }}
+          ariaLabel="Command Centre text size"
+          options={UI_SCALE_OPTIONS}
+        />
+      </div>
+
+      <label class="flex items-start gap-2.5 pt-1">
+        <input
+          type="checkbox"
+          class="mt-0.5 accent-primary"
+          checked={$reduceEffects}
+          disabled={$osPrefersReducedMotion}
+          onchange={(e) => { $userReduceFlag = e.currentTarget.checked }}
+        />
+        <span>
+          <span class="block text-[13px]">Reduce visual effects</span>
+          {#if $osPrefersReducedMotion}
+            <span class="block text-xs text-muted-foreground">Required by the desktop (Reduce animations)</span>
+          {/if}
+        </span>
+      </label>
     </div>
 
     <!-- Header name -->
@@ -216,18 +250,20 @@
       <!-- Text scale -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <p class="text-sm font-medium flex items-center gap-2">
-            <Type size={14} class="text-muted-foreground" /> Text Scaling
-          </p>
+          <label for="gnome-text-scale" class="text-sm font-medium flex items-center gap-2">
+            <Type size={14} class="text-muted-foreground" /> Desktop text scale (GNOME)
+          </label>
           <span class="text-sm font-medium tabular-nums">{textScale.toFixed(2)}×</span>
         </div>
         <div class="flex justify-between text-xs text-muted-foreground mb-1">
           <span>0.75×</span><span>1.00×</span><span>1.50×</span><span>2.00×</span>
         </div>
         <input
+          id="gnome-text-scale"
           type="range" min="0.75" max="2.0" step="0.05"
           bind:value={textScale}
           oninput={mark}
+          aria-valuetext="{textScale.toFixed(2)}×"
           class="w-full accent-primary"
         />
       </div>

@@ -30,7 +30,12 @@ const OVERLAY: Record<ThemeId, { color: string; symbolColor: string; source: 'li
 
 const STORAGE_KEY = 'lcc-theme'
 const REDUCE_KEY = 'lcc-reduce-effects'
+const SCALE_KEY = 'lcc-ui-scale'
 const DEFAULT_THEME: ThemeId = 'default'
+
+export type UiScale = '1' | '1.1' | '1.25' | '1.5'
+const UI_SCALES: readonly UiScale[] = ['1', '1.1', '1.25', '1.5']
+const DEFAULT_SCALE: UiScale = '1'
 
 function isThemeId(v: string | null): v is ThemeId {
   return !!v && THEMES.some((t) => t.id === v)
@@ -75,7 +80,32 @@ userReduceFlag.subscribe((on) => {
   try { localStorage.setItem(REDUCE_KEY, on ? '1' : '0') } catch { /* non-critical */ }
 })
 
-const osPrefersReducedMotion = readable(
+function isUiScale(v: string | null): v is UiScale {
+  return !!v && (UI_SCALES as readonly string[]).includes(v)
+}
+
+function readScale(): UiScale {
+  try {
+    const v = localStorage.getItem(SCALE_KEY)
+    return isUiScale(v) ? v : DEFAULT_SCALE
+  } catch {
+    return DEFAULT_SCALE
+  }
+}
+
+function applyScale(v: UiScale): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.style.setProperty('--ui-scale', v)
+}
+
+export const uiScale = writable<UiScale>(readScale())
+
+uiScale.subscribe((v) => {
+  applyScale(v)
+  try { localStorage.setItem(SCALE_KEY, v) } catch { /* non-critical */ }
+})
+
+export const osPrefersReducedMotion = readable(
   typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
     : false,

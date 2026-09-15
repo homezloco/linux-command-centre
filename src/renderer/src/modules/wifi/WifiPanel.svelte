@@ -1,13 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
-  import { Wifi, WifiOff, Lock, Unlock, RefreshCw, X, Check, Trash2, Bookmark, Shield } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import { Page, Card, Skeleton, Button, Toggle, Dialog, ConfirmDialog, EmptyState } from '$ui'
+  import { toasts } from '$stores/toasts'
+  import { Wifi, WifiOff, Lock, Unlock, RefreshCw, Check, Trash2, Bookmark, Shield, Search } from 'lucide-svelte'
+  import Alert from '$lib/Alert.svelte'
 
   type WifiStatus = { blocked: boolean; ssid: string | null; signal: number | null; security: string | null }
   type Network    = { ssid: string; signal: number; security: string; bssid: string; active: boolean }
   type SavedNetwork = { name: string; active: boolean }
+
+  const TITLE = 'Wi-Fi'
 
   let status    = $state<WifiStatus | null>(null)
   let networks  = $state<Network[]>([])
@@ -16,23 +19,30 @@
   let loading   = $state(true)
   let scanning  = $state(false)
   let toggling  = $state(false)
+  let togglingMac = $state(false)
+  let disconnecting = $state(false)
   let connecting = $state('')       // ssid currently being connected
   let error     = $state('')
 
   // Password dialog state
   let pwdTarget = $state<Network | null>(null)
   let pwdInput  = $state('')
-  let pwdError  = $state('')
+
+  // Forget confirm state
+  let forgetTarget = $state<string | null>(null)
+
+  function isOpen(net: Network) {
+    return net.security === 'Open' || net.security === '--'
+  }
 
   async function loadStatus() {
-    loading = true; error = ''
+    error = ''
     try {
       status = await invoke<WifiStatus>('wifi:status')
       const macRandom = await invoke<{ enabled: boolean }>('wifi:macRandomization')
       macRandomization = macRandom.enabled
     }
     catch (e) { error = String(e) }
-    finally { loading = false }
   }
 
   async function loadSaved() {
@@ -46,253 +56,302 @@
       networks = await invoke<Network[]>('wifi:scan')
       await loadSaved()
     }
-    catch (e) { error = String(e) }
+    catch (e) { toasts.error(String(e), TITLE) }
     finally { scanning = false }
   }
 
-  async function toggle() {
+  async function toggleRadio() {
     toggling = true
-    try { await invoke('wifi:toggle'); await loadStatus(); await scan() }
-    catch (e) { error = String(e) }
+    try {
+      await invoke('wifi:toggle')
+      await loadStatus()
+      toasts.success(status?.blocked ? 'Wi-Fi turned off' : 'Wi-Fi turned on', TITLE)
+      if (!status?.blocked) await scan()
+    }
+    catch (e) { toasts.error(String(e), TITLE) }
     finally { toggling = false }
   }
 
-  async function connect(net: Network) {
-    if (net.security !== 'Open' && net.security !== '--') {
-      pwdTarget = net; pwdInput = ''; pwdError = ''
+  function connect(net: Network) {
+    if (!isOpen(net)) {
+      pwdTarget = net; pwdInput = ''
       return
     }
-    doConnect(net.ssid)
+    void doConnect(net.ssid)
   }
 
   async function doConnect(ssid: string, password?: string) {
-    connecting = ssid; pwdTarget = null; pwdError = ''
+    connecting = ssid; pwdTarget = null
     try {
       const res = await invoke<{ ok: boolean; error?: string }>('wifi:connect', ssid, password)
       if (!res.ok) throw new Error(res.error ?? 'Connection failed')
+      toasts.success(`Connected to ${ssid}`, TITLE)
       await loadStatus()
       await scan()
-    } catch (e) { error = String(e) }
+    } catch (e) { toasts.error(String(e), TITLE) }
     finally { connecting = '' }
   }
 
   async function disconnect() {
-    try { await invoke('wifi:disconnect'); await loadStatus(); await scan() }
-    catch (e) { error = String(e) }
+    disconnecting = true
+    const from = status?.ssid
+    try {
+      await invoke('wifi:disconnect')
+      toasts.success(from ? `Disconnected from ${from}` : 'Disconnected', TITLE)
+      await loadStatus()
+      await scan()
+    }
+    catch (e) { toasts.error(String(e), TITLE) }
+    finally { disconnecting = false }
   }
 
   async function forget(name: string) {
-    if (!confirm(`Forget network "${name}"?`)) return
     try {
       const res = await invoke<{ ok: boolean; error?: string }>('wifi:forget', name)
       if (!res.ok) throw new Error(res.error ?? 'Failed to forget network')
+      toasts.success(`Forgot ${name}`, TITLE)
+      forgetTarget = null
       await loadSaved()
       await scan()
-    } catch (e) { error = String(e) }
+    } catch (e) { toasts.error(String(e), TITLE) }
   }
 
-  async function toggleMacRandomization() {
+  async function setMacRandomization(enabled: boolean) {
+    togglingMac = true
     try {
-      await invoke('wifi:setMacRandomization', !macRandomization)
-      macRandomization = !macRandomization
-    } catch (e) { error = String(e) }
+      await invoke('wifi:setMacRandomization', enabled)
+      macRandomization = enabled
+      toasts.success(`MAC address randomization ${enabled ? 'enabled' : 'disabled'}`, TITLE)
+    } catch (e) { toasts.error(String(e), TITLE) }
+    finally { togglingMac = false }
   }
 
-  onMount(async () => { await loadStatus(); await scan() })
+  onMount(async () => {
+    await loadStatus()
+    loading = false
+    if (status && !status.blocked) await scan()
+  })
 
   // Signal strength → bar count (0-4)
   function bars(signal: number) { return Math.min(4, Math.round(signal / 25)) }
 
   function barColor(signal: number) {
-    if (signal >= 70) return 'text-green-400'
-    if (signal >= 40) return 'text-yellow-400'
-    return 'text-red-400'
+    if (signal >= 70) return 'text-status-ok'
+    if (signal >= 40) return 'text-status-warn'
+    return 'text-status-fail'
   }
 </script>
 
-{#if loading}
-  <Spinner />
-{:else}
-<div class="max-w-md space-y-3">
+<Page width="narrow">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Scan for networks"
+      disabled={scanning || loading || !!status?.blocked}
+      onclick={() => scan()}
+    >
+      <RefreshCw size={14} class={scanning ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-  <!-- Header: status + toggle -->
-  {#if status}
-  <div class="rounded-xl border border-border bg-card p-4">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        {#if status.blocked}
-          <WifiOff size={22} class="text-muted-foreground" />
-          <p class="font-medium text-muted-foreground">Disabled</p>
+  <div class="space-y-3">
+    {#if error}
+      <Alert message={error} />
+    {/if}
+
+    {#if loading}
+      <Skeleton class="h-16 w-full" />
+      <Skeleton class="h-48 w-full" />
+      <Skeleton class="h-16 w-full" />
+
+    {:else if status}
+      <!-- Header: status + radio toggle -->
+      <Card class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0">
+          {#if status.blocked}
+            <WifiOff size={22} class="text-muted-foreground shrink-0" />
+            <p class="text-[13px] font-medium text-muted-foreground" id="wifi-radio-label">Wi-Fi is off</p>
+          {:else}
+            <Wifi size={22} class="text-primary shrink-0" />
+            <div class="min-w-0">
+              <p class="text-[13px] font-medium truncate" id="wifi-radio-label">{status.ssid ?? 'Not connected'}</p>
+              {#if status.ssid && status.signal !== null}
+                <p class="text-xs text-muted-foreground">{status.signal}% signal · {status.security ?? ''}</p>
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          {#if status.ssid}
+            <Button variant="secondary" size="sm" loading={disconnecting} onclick={disconnect}>
+              Disconnect
+            </Button>
+          {/if}
+          <Toggle
+            checked={!status.blocked}
+            disabled={toggling}
+            aria-label="Wi-Fi radio"
+            onCheckedChange={() => toggleRadio()}
+          />
+        </div>
+      </Card>
+
+      <!-- Network list -->
+      {#if !status.blocked}
+        {#if scanning && networks.length === 0}
+          <Card padding="none">
+            {#each [0, 1, 2, 3] as i (i)}
+              <div class="flex items-center gap-3 px-4 py-2.5 border-b border-border/60 last:border-0">
+                <Skeleton class="h-4 w-4 shrink-0" />
+                <Skeleton class="h-3 flex-1" />
+                <Skeleton class="h-3 w-3 shrink-0" />
+              </div>
+            {/each}
+          </Card>
+        {:else if networks.length === 0}
+          <EmptyState icon={Wifi} title="No networks found" message="Move closer to an access point and scan again.">
+            {#snippet action()}
+              <Button variant="primary" size="sm" loading={scanning} onclick={() => scan()}>
+                <Search size={12} />
+                Scan
+              </Button>
+            {/snippet}
+          </EmptyState>
         {:else}
-          <Wifi size={22} class="text-primary" />
-          <div>
-            <p class="font-medium">{status.ssid ?? 'Not connected'}</p>
-            {#if status.ssid && status.signal !== null}
-              <p class="text-xs text-muted-foreground">{status.signal}% signal · {status.security ?? ''}</p>
-            {/if}
-          </div>
-        {/if}
-      </div>
-      <div class="flex items-center gap-2">
-        {#if status.ssid}
-          <button onclick={disconnect}
-            class="text-xs px-2 py-1 rounded border border-border hover:bg-secondary transition-colors text-muted-foreground">
-            Disconnect
-          </button>
-        {/if}
-        <button onclick={toggle} disabled={toggling} aria-label="Toggle WiFi"
-          class={`relative w-11 h-6 rounded-full transition-colors disabled:opacity-50 ${status.blocked ? 'bg-secondary' : 'bg-primary'}`}>
-          <span class={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${status.blocked ? '' : 'translate-x-5'}`}></span>
-        </button>
-      </div>
-    </div>
-    {#if error}<div class="mt-2"><Alert message={error} /></div>{/if}
-  </div>
-  {/if}
+          <Card padding="none" class="overflow-hidden">
+            <div class="px-4 py-2.5 border-b border-border">
+              <p class="text-[13px] font-medium">Available networks</p>
+            </div>
+            <div class="divide-y divide-border max-h-80 overflow-y-auto">
+              {#each networks as net (net.ssid)}
+                <button
+                  type="button"
+                  onclick={() => connect(net)}
+                  disabled={connecting !== '' || net.active}
+                  aria-label="{net.active ? 'Connected to' : 'Connect to'} {net.ssid}"
+                  class="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-[hsl(var(--hover-overlay)/var(--hover-overlay-alpha))]
+                         transition-colors text-left disabled:cursor-default
+                         {net.active ? 'bg-primary/5' : ''}"
+                >
+                  <!-- Signal bars -->
+                  <div class="flex items-end gap-[2px] w-4 {barColor(net.signal)} shrink-0" aria-hidden="true">
+                    {#each [1, 2, 3, 4] as b (b)}
+                      <div class="w-[3px] rounded-sm transition-colors {bars(net.signal) >= b ? 'opacity-100' : 'opacity-20'}"
+                           style="height: {b * 4}px; background: currentColor;"></div>
+                    {/each}
+                  </div>
 
-  <!-- Network list -->
-  {#if !status?.blocked}
-  <div class="rounded-xl border border-border bg-card overflow-hidden">
-    <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
-      <p class="text-sm font-medium">Available networks</p>
-      <button onclick={scan} disabled={scanning}
-        class="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50">
-        <RefreshCw size={13} class={scanning ? 'animate-spin' : ''} />
-      </button>
-    </div>
+                  <div class="flex-1 min-w-0">
+                    <p class="text-[13px] truncate {net.active ? 'text-primary font-medium' : ''}">{net.ssid}</p>
+                  </div>
 
-    {#if scanning && networks.length === 0}
-      <div class="py-8 text-center text-sm text-muted-foreground">Scanning…</div>
-    {:else if networks.length === 0}
-      <div class="py-8 text-center text-sm text-muted-foreground">No networks found</div>
-    {:else}
-      <div class="divide-y divide-border max-h-80 overflow-y-auto">
-        {#each networks as net}
-          <button
-            onclick={() => connect(net)}
-            disabled={connecting !== '' || net.active}
-            class="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/50
-                   transition-colors text-left disabled:cursor-default
-                   {net.active ? 'bg-primary/5' : ''}"
-          >
-            <!-- Signal bars -->
-            <div class="flex items-end gap-[2px] w-4 {barColor(net.signal)} shrink-0">
-              {#each [1,2,3,4] as b}
-                <div class="w-[3px] rounded-sm transition-colors
-                             {bars(net.signal) >= b ? 'opacity-100' : 'opacity-20'}"
-                     style="height: {b * 4}px; background: currentColor;"></div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    {#if isOpen(net)}
+                      <Unlock size={11} class="text-muted-foreground/50" />
+                    {:else}
+                      <Lock size={11} class="text-muted-foreground" />
+                    {/if}
+                    {#if net.active}
+                      <Check size={14} class="text-primary" />
+                    {:else if connecting === net.ssid}
+                      <span class="text-xs text-muted-foreground">Connecting…</span>
+                    {/if}
+                  </div>
+                </button>
               {/each}
             </div>
+          </Card>
+        {/if}
+      {/if}
 
-            <div class="flex-1 min-w-0">
-              <p class="text-sm truncate {net.active ? 'text-primary font-medium' : ''}">{net.ssid}</p>
-            </div>
-
-            <div class="flex items-center gap-2 shrink-0">
-              {#if net.security === 'Open' || net.security === '--'}
-                <Unlock size={11} class="text-muted-foreground/50" />
-              {:else}
-                <Lock size={11} class="text-muted-foreground" />
-              {/if}
-              {#if net.active}
-                <Check size={14} class="text-primary" />
-              {:else if connecting === net.ssid}
-                <span class="text-xs text-muted-foreground">Connecting…</span>
-              {/if}
-            </div>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
-  {/if}
-
-  <!-- Saved Networks -->
-  {#if saved.length > 0}
-    <div class="rounded-xl border border-border bg-card overflow-hidden">
-      <div class="flex items-center justify-between px-4 py-2.5 border-b border-border">
-        <p class="text-sm font-medium flex items-center gap-2">
-          <Bookmark size={14} class="text-muted-foreground" />
-          Saved networks ({saved.length})
-        </p>
-      </div>
-      <div class="divide-y divide-border max-h-40 overflow-y-auto">
-        {#each saved as net}
-          <div class="flex items-center justify-between px-4 py-2">
-            <div class="flex items-center gap-2 min-w-0">
-              <span class="text-sm text-muted-foreground truncate">{net.name}</span>
-              {#if net.active}
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">Connected</span>
-              {/if}
-            </div>
-            <button
-              onclick={() => forget(net.name)}
-              class="p-1.5 text-muted-foreground hover:text-destructive transition-colors"
-              title="Forget network"
-            >
-              <Trash2 size={13} />
-            </button>
+      <!-- Saved networks -->
+      {#if saved.length > 0}
+        <Card padding="none" class="overflow-hidden">
+          <div class="px-4 py-2.5 border-b border-border">
+            <p class="text-[13px] font-medium flex items-center gap-2">
+              <Bookmark size={14} class="text-muted-foreground" />
+              Saved networks ({saved.length})
+            </p>
           </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
+          <div class="divide-y divide-border max-h-40 overflow-y-auto">
+            {#each saved as net (net.name)}
+              <div class="flex items-center justify-between gap-2 px-4 py-1.5">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-[13px] text-muted-foreground truncate">{net.name}</span>
+                  {#if net.active}
+                    <span class="text-[11px] px-1.5 py-0.5 rounded bg-primary/20 text-primary shrink-0">Connected</span>
+                  {/if}
+                </div>
+                <Button
+                  variant="icon"
+                  size="sm"
+                  aria-label="Forget {net.name}"
+                  class="hover:text-destructive"
+                  onclick={() => { forgetTarget = net.name }}
+                >
+                  <Trash2 size={13} />
+                </Button>
+              </div>
+            {/each}
+          </div>
+        </Card>
+      {/if}
 
-  <!-- MAC Randomization -->
-  <div class="rounded-xl border border-border bg-card p-4">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-2">
-        <Shield size={15} class="text-muted-foreground" />
-        <div>
-          <p class="text-sm font-medium">MAC address randomization</p>
-          <p class="text-xs text-muted-foreground">Use random MAC for privacy</p>
+      <!-- MAC randomisation -->
+      <Card class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <Shield size={15} class="text-muted-foreground shrink-0" />
+          <div class="min-w-0">
+            <p class="text-[13px] font-medium" id="wifi-mac-label">MAC address randomization</p>
+            <p class="text-xs text-muted-foreground">Use a random MAC address for privacy</p>
+          </div>
         </div>
-      </div>
-      <button
-        onclick={toggleMacRandomization}
-        aria-label="Toggle MAC address randomization"
-        class="relative w-11 h-6 rounded-full transition-colors {macRandomization ? 'bg-primary' : 'bg-secondary border border-border'}"
-      >
-        <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform {macRandomization ? 'translate-x-5' : ''}"></span>
-      </button>
-    </div>
+        <Toggle
+          checked={macRandomization}
+          disabled={togglingMac}
+          aria-labelledby="wifi-mac-label"
+          onCheckedChange={(v) => setMacRandomization(v)}
+        />
+      </Card>
+    {/if}
   </div>
 
   <!-- Password dialog -->
-  {#if pwdTarget}
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-    <div class="bg-card border border-border rounded-xl p-5 w-80 space-y-4 shadow-xl">
-      <div class="flex items-center justify-between">
-        <p class="font-medium">Connect to "{pwdTarget.ssid}"</p>
-        <button onclick={() => pwdTarget = null} class="text-muted-foreground hover:text-foreground">
-          <X size={15} />
-        </button>
-      </div>
+  <Dialog
+    open={pwdTarget !== null}
+    onOpenChange={(open) => { if (!open) pwdTarget = null }}
+    title="Connect to {pwdTarget?.ssid ?? ''}"
+    description="This network is secured with {pwdTarget?.security ?? 'a password'}."
+    class="max-w-sm"
+  >
+    <form
+      class="space-y-3"
+      onsubmit={(e) => { e.preventDefault(); if (pwdTarget && pwdInput) void doConnect(pwdTarget.ssid, pwdInput) }}
+    >
       <input
         type="password"
         placeholder="Password"
+        aria-label="Network password"
+        autocomplete="off"
         bind:value={pwdInput}
-        onkeydown={(e) => e.key === 'Enter' && doConnect(pwdTarget!.ssid, pwdInput)}
-        class="w-full px-3 py-2 rounded-md bg-secondary border border-border text-sm
-               focus:outline-none focus:ring-1 focus:ring-primary"
+        class="w-full h-8 px-3 rounded-md bg-secondary/50 border border-border text-[13px] focus:outline-none"
       />
-      {#if pwdError}<p class="text-xs text-destructive">{pwdError}</p>{/if}
       <div class="flex gap-2 justify-end">
-        <button onclick={() => pwdTarget = null}
-          class="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-secondary transition-colors">
-          Cancel
-        </button>
-        <button
-          onclick={() => doConnect(pwdTarget!.ssid, pwdInput)}
-          disabled={!pwdInput}
-          class="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground
-                 hover:bg-primary/90 disabled:opacity-50 transition-colors">
-          Connect
-        </button>
+        <Button variant="secondary" size="sm" onclick={() => { pwdTarget = null }}>Cancel</Button>
+        <Button type="submit" variant="primary" size="sm" disabled={!pwdInput}>Connect</Button>
       </div>
-    </div>
-  </div>
-  {/if}
+    </form>
+  </Dialog>
 
-</div>
-{/if}
+  <ConfirmDialog
+    open={forgetTarget !== null}
+    onOpenChange={(open) => { if (!open) forgetTarget = null }}
+    title="Forget {forgetTarget ?? ''}?"
+    description="The saved password for this network will be removed. You can reconnect by entering it again."
+    actions={[
+      { label: 'Cancel', variant: 'secondary', onClick: () => { forgetTarget = null } },
+      { label: 'Forget', variant: 'destructive', onClick: () => forget(forgetTarget!) },
+    ]}
+  />
+</Page>

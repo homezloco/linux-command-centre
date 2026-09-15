@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
+  import { Page, Card, Skeleton, Button } from '$ui'
   import { Network, Wifi, Globe, RefreshCw, ArrowDown, ArrowUp, Server, CheckCircle2, XCircle } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
-  import Alert   from '$lib/Alert.svelte'
+  import Alert from '$lib/Alert.svelte'
 
   let { visible = true }: { visible?: boolean } = $props()
 
@@ -19,12 +19,13 @@
   }
   type SpeedMap = Record<string, { rxBps: number; txBps: number }>
 
+  const labelCls = 'text-[11px] text-muted-foreground uppercase tracking-wide'
+
   let status = $state<NetworkStatus | null>(null)
   let speeds = $state<SpeedMap>({})
   let loading = $state(true)
   let refreshing = $state(false)
   let error = $state('')
-  let speedInterval: ReturnType<typeof setInterval> | undefined
 
   async function load(force = false) {
     if (refreshing || (force && loading)) return
@@ -63,152 +64,159 @@
   }
 
   onMount(() => {
-    load()
-    refreshSpeed()
+    void load()
+    void refreshSpeed()
   })
+
+  // Only the active panel samples link speed.
   $effect(() => {
-    if (!visible) { clearInterval(speedInterval); speedInterval = undefined; return }
-    if (!speedInterval) speedInterval = setInterval(refreshSpeed, 1000)
+    if (!visible) return
+    const id = setInterval(() => { void refreshSpeed() }, 1000)
+    return () => clearInterval(id)
   })
-  onDestroy(() => clearInterval(speedInterval))
 </script>
 
-{#if loading}
-  <Spinner />
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh interfaces"
+      disabled={refreshing || loading}
+      onclick={() => load(true)}
+    >
+      <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
+    </Button>
+  {/snippet}
 
-{:else if error}
-  <Alert message={error} />
+  <div class="space-y-4">
+    {#if error}
+      <Alert message={error} />
+    {/if}
 
-{:else if status}
-  <div class="space-y-4 max-w-2xl">
+    {#if loading}
+      <Skeleton class="h-36 w-full" />
+      <Skeleton class="h-36 w-full" />
+      <div class="grid grid-cols-2 gap-3">
+        <Skeleton class="h-16 w-full" />
+        <Skeleton class="h-16 w-full" />
+      </div>
 
-    <!-- Refresh -->
-    <div class="flex justify-end">
-      <button
-        onclick={() => load(true)}
-        disabled={refreshing}
-        aria-label="Refresh"
-        class="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
-      >
-        <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
-      </button>
-    </div>
-
-    <!-- Interfaces -->
-    {#each status.interfaces as iface}
-      {@const Icon = ifaceIcon(iface)}
-      <div class="rounded-xl border border-border bg-card p-4 space-y-3
-                  {iface.isDefault ? 'border-primary/30' : ''}">
-        <!-- Header row -->
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg {iface.isDefault ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'}">
-              <Icon size={16} />
-            </div>
-            <div>
-              <div class="flex items-center gap-2">
-                <p class="text-sm font-medium">{iface.name}</p>
-                {#if iface.isDefault}
-                  <span class="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">default</span>
-                {/if}
+    {:else if status}
+      <!-- Interfaces -->
+      {#each status.interfaces as iface (iface.name)}
+        {@const Icon = ifaceIcon(iface)}
+        <Card class="space-y-3 {iface.isDefault ? 'border-primary/30' : ''}">
+          <!-- Header row -->
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="p-2 rounded-lg shrink-0 {iface.isDefault ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'}">
+                <Icon size={16} />
               </div>
-              <p class="text-xs text-muted-foreground">{iface.mac ?? 'no MAC'}</p>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <p class="text-[13px] font-medium">{iface.name}</p>
+                  {#if iface.isDefault}
+                    <span class="text-[11px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">default</span>
+                  {/if}
+                </div>
+                <p class="text-xs text-muted-foreground font-mono">{iface.mac ?? 'no MAC'}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              {#if iface.state === 'up'}
+                <CheckCircle2 size={14} class="text-status-ok" />
+                <span class="text-xs font-medium text-status-ok">UP</span>
+              {:else}
+                <XCircle size={14} class="text-muted-foreground" />
+                <span class="text-xs text-muted-foreground">{iface.state.toUpperCase()}</span>
+              {/if}
             </div>
           </div>
-          <div class="flex items-center gap-1.5 shrink-0">
-            {#if iface.state === 'up'}
-              <CheckCircle2 size={14} class="text-green-400" />
-              <span class="text-xs font-medium text-green-400">UP</span>
+
+          <!-- IP addresses -->
+          {#if iface.ipv4 || iface.ipv6}
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              {#if iface.ipv4}
+                <div class="rounded-lg bg-secondary/50 p-2">
+                  <p class="text-muted-foreground mb-0.5">IPv4</p>
+                  <p class="font-mono font-medium">{iface.ipv4}</p>
+                </div>
+              {/if}
+              {#if iface.ipv6}
+                <div class="rounded-lg bg-secondary/50 p-2 min-w-0">
+                  <p class="text-muted-foreground mb-0.5">IPv6</p>
+                  <p class="font-mono font-medium truncate">{iface.ipv6}</p>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Traffic stats -->
+          {#if iface.rx > 0 || iface.tx > 0}
+            {@const spd = speeds[iface.name]}
+            <div class="pt-1 border-t border-border space-y-1.5">
+              <!-- Live speed -->
+              {#if spd && (spd.rxBps > 0 || spd.txBps > 0)}
+                <div class="flex gap-3 text-xs font-medium tabular-nums">
+                  <span class="flex items-center gap-1 text-status-ok">
+                    <ArrowDown size={11} />
+                    {fmtSpeed(spd.rxBps)}
+                  </span>
+                  <span class="flex items-center gap-1 text-primary">
+                    <ArrowUp size={11} />
+                    {fmtSpeed(spd.txBps)}
+                  </span>
+                </div>
+              {/if}
+              <!-- Cumulative -->
+              <div class="flex gap-4 text-xs text-muted-foreground tabular-nums">
+                <span class="flex items-center gap-1">
+                  <ArrowDown size={12} class="text-status-ok/60" />
+                  {fmt(iface.rx)} total
+                </span>
+                <span class="flex items-center gap-1">
+                  <ArrowUp size={12} class="text-primary/60" />
+                  {fmt(iface.tx)} total
+                </span>
+                <span class="ml-auto">{iface.rxPackets.toLocaleString()} / {iface.txPackets.toLocaleString()} pkts</span>
+              </div>
+            </div>
+          {/if}
+        </Card>
+      {/each}
+
+      <!-- Gateway & DNS -->
+      <div class="grid grid-cols-2 gap-3">
+        <Card padding="sm" class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Globe size={13} />
+          </div>
+          <div class="min-w-0">
+            <p class={labelCls}>Gateway</p>
+            {#if status.gateway}
+              <p class="text-[13px] font-mono font-medium mt-0.5">{status.gateway}</p>
             {:else}
-              <XCircle size={14} class="text-muted-foreground" />
-              <span class="text-xs text-muted-foreground">{iface.state.toUpperCase()}</span>
+              <p class="text-xs text-muted-foreground mt-0.5">None</p>
             {/if}
           </div>
-        </div>
-
-        <!-- IP addresses -->
-        {#if iface.ipv4 || iface.ipv6}
-          <div class="grid grid-cols-2 gap-2 text-xs">
-            {#if iface.ipv4}
-              <div class="rounded-lg bg-secondary/50 p-2">
-                <p class="text-muted-foreground mb-0.5">IPv4</p>
-                <p class="font-mono font-medium">{iface.ipv4}</p>
-              </div>
-            {/if}
-            {#if iface.ipv6}
-              <div class="rounded-lg bg-secondary/50 p-2">
-                <p class="text-muted-foreground mb-0.5">IPv6</p>
-                <p class="font-mono font-medium truncate">{iface.ipv6}</p>
-              </div>
+        </Card>
+        <Card padding="sm" class="flex items-start gap-2.5">
+          <div class="w-7 h-7 rounded-md bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0 mt-0.5">
+            <Server size={13} />
+          </div>
+          <div class="min-w-0">
+            <p class={labelCls}>DNS</p>
+            {#if status.dnsServers.length > 0}
+              {#each status.dnsServers as dns, i (i)}
+                <p class="text-xs font-mono mt-0.5">{dns}</p>
+              {/each}
+            {:else}
+              <p class="text-xs text-muted-foreground mt-0.5">None found</p>
             {/if}
           </div>
-        {/if}
-
-        <!-- Traffic stats -->
-        {#if iface.rx > 0 || iface.tx > 0}
-          {@const spd = speeds[iface.name]}
-          <div class="pt-1 border-t border-border space-y-1.5">
-            <!-- Live speed -->
-            {#if spd && (spd.rxBps > 0 || spd.txBps > 0)}
-              <div class="flex gap-3 text-xs font-medium">
-                <span class="flex items-center gap-1 text-green-400">
-                  <ArrowDown size={11} />
-                  {fmtSpeed(spd.rxBps)}
-                </span>
-                <span class="flex items-center gap-1 text-blue-400">
-                  <ArrowUp size={11} />
-                  {fmtSpeed(spd.txBps)}
-                </span>
-              </div>
-            {/if}
-            <!-- Cumulative -->
-            <div class="flex gap-4 text-xs text-muted-foreground">
-              <span class="flex items-center gap-1">
-                <ArrowDown size={12} class="text-green-400/60" />
-                {fmt(iface.rx)} total
-              </span>
-              <span class="flex items-center gap-1">
-                <ArrowUp size={12} class="text-blue-400/60" />
-                {fmt(iface.tx)} total
-              </span>
-              <span class="ml-auto">{iface.rxPackets.toLocaleString()} / {iface.txPackets.toLocaleString()} pkts</span>
-            </div>
-          </div>
-        {/if}
+        </Card>
       </div>
-    {/each}
-
-    <!-- Gateway & DNS -->
-    <div class="grid grid-cols-2 gap-3">
-      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-md bg-orange-500/10 text-orange-400 flex items-center justify-center shrink-0 mt-0.5">
-          <Globe size={13} />
-        </div>
-        <div class="min-w-0">
-          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">Gateway</p>
-          {#if status.gateway}
-            <p class="text-sm font-mono font-medium mt-0.5">{status.gateway}</p>
-          {:else}
-            <p class="text-xs text-muted-foreground mt-0.5">None</p>
-          {/if}
-        </div>
-      </div>
-      <div class="rounded-xl border border-border bg-card p-3 flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-md bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0 mt-0.5">
-          <Server size={13} />
-        </div>
-        <div class="min-w-0">
-          <p class="text-[10px] text-muted-foreground/70 uppercase tracking-wide">DNS</p>
-          {#if status.dnsServers.length > 0}
-            {#each status.dnsServers as dns}
-              <p class="text-xs font-mono mt-0.5">{dns}</p>
-            {/each}
-          {:else}
-            <p class="text-xs text-muted-foreground mt-0.5">None found</p>
-          {/if}
-        </div>
-      </div>
-    </div>
-
+    {/if}
   </div>
-{/if}
+</Page>
