@@ -15,6 +15,7 @@
 </script>
 
 <script lang="ts" generics="T extends string">
+  import { tick } from 'svelte'
   import { Select, Combobox } from 'bits-ui'
   import { Check, ChevronDown } from 'lucide-svelte'
   import { cn, overlayPortalTarget } from '$lib/utils'
@@ -34,6 +35,7 @@
   let searchValue = $state('')
   let open = $state(false)
   let inputGen = $state(0)
+  let inputEl = $state<HTMLInputElement | null>(null)
 
   const selected = $derived(options.find((o) => o.value === value))
   const filtered = $derived(
@@ -63,12 +65,15 @@
     onChange(v as T)
   }
 
-  function handleOpenChange(next: boolean) {
+  async function handleOpenChange(next: boolean) {
     open = next
-    if (!next) {
-      searchValue = ''
-      inputGen += 1
-    }
+    if (next) return
+    const restore = document.activeElement === inputEl
+    const needsReset = (inputEl?.value ?? '') !== committedLabel
+    searchValue = ''
+    if (needsReset) inputGen += 1
+    await tick()
+    if (restore) inputEl?.focus()
   }
 </script>
 
@@ -86,6 +91,7 @@
     <div class="relative">
       {#key `${committedLabel}:${inputGen}`}
         <Combobox.Input
+          bind:ref={inputEl}
           {id}
           {placeholder}
           defaultValue={committedLabel}
