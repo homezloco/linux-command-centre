@@ -2,14 +2,17 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import {
-    Shield, ShieldAlert, ShieldCheck, ShieldOff,
+    ShieldAlert, ShieldCheck, ShieldOff,
     Lock, Unlock, Eye, EyeOff, RefreshCw,
     Terminal, HardDrive, Globe, Users, AlertTriangle,
     CheckCircle2, XCircle, ChevronDown, ChevronUp,
     Power, Bug, ClipboardCheck, Download, Play
   } from 'lucide-svelte'
-  import Spinner from '$lib/Spinner.svelte'
   import Alert from '$lib/Alert.svelte'
+  import { toasts } from '$stores/toasts'
+  import { Page, Skeleton, Button, Toggle, ConfirmDialog } from '$ui'
+
+  const TITLE = 'Security'
 
   // ── Types ─────────────────────────────────────────────────────────────────
   type FirewallStatus = {
@@ -233,42 +236,48 @@
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────
-  async function toggleFirewall() {
+  async function setFirewall(active: boolean) {
     if (!status?.firewall) return
     firewallToggling = true
     try {
-      const action = status.firewall.active ? 'disable' : 'enable'
-      await invoke('firewall:set', action)
-      await load()
+      await invoke('firewall:set', active ? 'enable' : 'disable')
+      toasts.success(active ? 'Firewall enabled' : 'Firewall disabled', TITLE)
+      await load(true)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       firewallToggling = false
     }
   }
 
-  async function toggleSsh() {
+  // Stopping SSH is confirmed (this is where people stop SSH); starting is instant.
+  let confirmSshStop = $state(false)
+
+  async function setSsh(running: boolean) {
     if (!status?.ssh) return
+    if (!running && !confirmSshStop) { confirmSshStop = true; return }
     sshToggling = true
     try {
-      const action = status.ssh.running ? 'stop' : 'start'
-      await invoke('ssh:set', action)
-      await load()
+      await invoke('ssh:set', running ? 'start' : 'stop')
+      toasts.success(running ? 'SSH server started' : 'SSH server stopped', TITLE)
+      confirmSshStop = false
+      await load(true)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       sshToggling = false
     }
   }
 
-  async function toggleAutoUpdates() {
+  async function setAutoUpdates(enabled: boolean) {
     if (!status?.autoUpdates) return
     autoUpdatesToggling = true
     try {
-      await invoke('security:set-auto-updates', !status.autoUpdates.enabled)
-      await load()
+      await invoke('security:set-auto-updates', enabled)
+      toasts.success(enabled ? 'Automatic security updates enabled' : 'Automatic security updates disabled', TITLE)
+      await load(true)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       autoUpdatesToggling = false
     }
@@ -280,8 +289,9 @@
     activeStream = 'install'
     try {
       await invoke('security:install-tool', name)
+      toasts.success(`Installed ${name}`, TITLE)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       installing = new Set([...installing].filter(n => n !== name))
       activeStream = null
@@ -296,9 +306,10 @@
     purging = true
     try {
       await invoke('security:purge-residual')
-      await load()
+      toasts.success('Residual packages purged', TITLE)
+      await load(true)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       purging = false
     }
@@ -308,9 +319,10 @@
     blacklisting = true
     try {
       await invoke('security:blacklist-protocols')
-      await load()
+      toasts.success('Unused network protocols blacklisted', TITLE)
+      await load(true)
     } catch (e) {
-      error = String(e)
+      toasts.error(String(e), TITLE)
     } finally {
       blacklisting = false
     }
@@ -413,26 +425,26 @@
   }
 </script>
 
-<div class="max-w-2xl space-y-3">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-2">
-      <Shield size={18} class="text-primary" />
-      <span class="text-sm font-medium">Security Overview</span>
-    </div>
-    <button
+<Page width="wide">
+  {#snippet actions()}
+    <Button
+      variant="icon"
+      size="sm"
+      aria-label="Refresh security status"
+      disabled={refreshing || loading}
       onclick={() => load(true)}
-      disabled={refreshing}
-      class="text-muted-foreground hover:text-foreground transition-colors"
     >
       <RefreshCw size={14} class={refreshing ? 'animate-spin' : ''} />
-    </button>
-  </div>
+    </Button>
+  {/snippet}
 
+  <div class="space-y-3">
   {#if error}<Alert message={error} />{/if}
 
   {#if loading}
-    <Spinner height="h-64" />
+    {#each [0, 1, 2, 3, 4, 5] as i (i)}
+      <Skeleton class="h-[4.25rem] w-full" />
+    {/each}
   {:else if status}
 
     <!-- Firewall -->
@@ -444,14 +456,14 @@
           aria-label="Toggle firewall section"
         >
           {#if status.firewall?.active}
-            <ShieldCheck size={18} class="text-green-400" />
+            <ShieldCheck size={18} class="text-status-ok" />
           {:else if status.firewall?.installed}
-            <ShieldAlert size={18} class="text-yellow-400" />
+            <ShieldAlert size={18} class="text-status-warn" />
           {:else}
             <ShieldOff size={18} class="text-muted-foreground" />
           {/if}
           <div class="text-left">
-            <p class="text-sm font-medium">Firewall</p>
+            <p class="text-[13px] font-medium">Firewall</p>
             <p class="text-xs text-muted-foreground">
               {#if status.firewall?.active}
                 Active · {status.firewall.rules} rules
@@ -465,16 +477,7 @@
         </button>
         <div class="flex items-center gap-2">
           {#if status.firewall?.installed}
-            <button
-              onclick={toggleFirewall}
-              disabled={firewallToggling}
-              aria-label="Toggle firewall"
-              class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
-                     {status.firewall.active ? 'bg-green-400' : 'bg-secondary border border-border'}"
-            >
-              <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform
-                           {status.firewall.active ? 'translate-x-5' : ''}"></span>
-            </button>
+            <Toggle checked={status.firewall.active} disabled={firewallToggling} aria-label="Firewall" onCheckedChange={(v) => setFirewall(v)} />
           {/if}
           <button onclick={() => toggleSection('firewall')} aria-label="Expand firewall" class="text-muted-foreground">
             {#if expanded.firewall}
@@ -488,7 +491,7 @@
 
       {#if expanded.firewall && status.firewall}
         <div class="px-4 pb-4 pt-1 space-y-2 border-t border-border">
-          <div class="grid grid-cols-2 gap-3 text-sm pt-2">
+          <div class="grid grid-cols-2 gap-3 text-[13px] pt-2">
             <div class="rounded-lg bg-secondary/50 p-2.5">
               <p class="text-xs text-muted-foreground mb-1">Default Incoming</p>
               <p class="font-medium capitalize">{status.firewall.defaultIncoming}</p>
@@ -511,7 +514,7 @@
         <div class="flex items-center gap-3">
           <Globe size={18} class="text-muted-foreground" />
           <div class="text-left">
-            <p class="text-sm font-medium">Open Ports</p>
+            <p class="text-[13px] font-medium">Open Ports</p>
             <p class="text-xs text-muted-foreground">
               {status.ports.length} listening {status.ports.length === 1 ? 'port' : 'ports'}
             </p>
@@ -527,13 +530,13 @@
       {#if expanded.ports}
         <div class="border-t border-border">
           {#if status.ports.length === 0}
-            <div class="px-4 py-6 text-center text-sm text-muted-foreground">
+            <div class="px-4 py-6 text-center text-[13px] text-muted-foreground">
               No listening ports found
             </div>
           {:else}
             <div class="divide-y divide-border">
               {#each status.ports as port}
-                <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+                <div class="flex items-center justify-between px-4 py-2.5 text-[13px]">
                   <div class="flex items-center gap-3">
                     <span class="text-xs px-1.5 py-0.5 rounded bg-secondary font-mono">
                       {port.protocol}
@@ -561,12 +564,12 @@
           aria-label="Toggle SSH section"
         >
           {#if status.ssh?.running}
-            <Terminal size={18} class="text-yellow-400" />
+            <Terminal size={18} class="text-status-warn" />
           {:else}
             <Terminal size={18} class="text-muted-foreground" />
           {/if}
           <div class="text-left">
-            <p class="text-sm font-medium">SSH Server</p>
+            <p class="text-[13px] font-medium">SSH Server</p>
             <p class="text-xs text-muted-foreground">
               {#if status.ssh?.running}
                 Running on port {status.ssh.port}
@@ -580,16 +583,7 @@
         </button>
         <div class="flex items-center gap-2">
           {#if status.ssh?.installed}
-            <button
-              onclick={toggleSsh}
-              disabled={sshToggling}
-              aria-label="Toggle SSH server"
-              class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
-                     {status.ssh.running ? 'bg-yellow-400' : 'bg-secondary border border-border'}"
-            >
-              <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform
-                           {status.ssh.running ? 'translate-x-5' : ''}"></span>
-            </button>
+            <Toggle checked={status.ssh.running} disabled={sshToggling} aria-label="SSH server" onCheckedChange={(v) => setSsh(v)} />
           {/if}
           <button onclick={() => toggleSection('ssh')} aria-label="Expand SSH" class="text-muted-foreground">
             {#if expanded.ssh}
@@ -603,15 +597,15 @@
 
       {#if expanded.ssh && status.ssh?.installed}
         <div class="px-4 pb-4 pt-1 space-y-2 border-t border-border">
-          <div class="grid grid-cols-2 gap-3 text-sm pt-2">
+          <div class="grid grid-cols-2 gap-3 text-[13px] pt-2">
             <div class="rounded-lg bg-secondary/50 p-2.5">
               <p class="text-xs text-muted-foreground mb-1">Password Auth</p>
               <div class="flex items-center gap-1.5">
                 {#if status.ssh.passwordAuth}
-                  <XCircle size={14} class="text-yellow-400" />
+                  <XCircle size={14} class="text-status-warn" />
                   <span>Enabled</span>
                 {:else}
-                  <CheckCircle2 size={14} class="text-green-400" />
+                  <CheckCircle2 size={14} class="text-status-ok" />
                   <span>Disabled</span>
                 {/if}
               </div>
@@ -623,15 +617,15 @@
                   <XCircle size={14} class="text-destructive" />
                   <span class="text-destructive">Enabled</span>
                 {:else}
-                  <CheckCircle2 size={14} class="text-green-400" />
+                  <CheckCircle2 size={14} class="text-status-ok" />
                   <span>Disabled</span>
                 {/if}
               </div>
             </div>
           </div>
           {#if status.ssh.passwordAuth || status.ssh.rootLogin}
-            <div class="rounded-lg bg-yellow-400/10 border border-yellow-400/30 p-2.5">
-              <p class="text-xs text-yellow-400 flex items-center gap-1.5">
+            <div class="rounded-lg bg-status-warn/10 border border-status-warn/30 p-2.5">
+              <p class="text-xs text-status-warn flex items-center gap-1.5">
                 <AlertTriangle size={12} />
                 {#if status.ssh.rootLogin}
                   Root login enabled — security risk
@@ -653,12 +647,12 @@
       >
         <div class="flex items-center gap-3">
           {#if status.encryption?.encrypted}
-            <Lock size={18} class="text-green-400" />
+            <Lock size={18} class="text-status-ok" />
           {:else}
             <Unlock size={18} class="text-muted-foreground" />
           {/if}
           <div class="text-left">
-            <p class="text-sm font-medium">Disk Encryption</p>
+            <p class="text-[13px] font-medium">Disk Encryption</p>
             <p class="text-xs text-muted-foreground">
               {#if status.encryption?.encrypted}
                 Encrypted
@@ -678,18 +672,18 @@
       {#if expanded.encryption && status.encryption}
         <div class="border-t border-border">
           {#if status.encryption.devices.length === 0}
-            <div class="px-4 py-4 text-center text-sm text-muted-foreground">
+            <div class="px-4 py-4 text-center text-[13px] text-muted-foreground">
               No LUKS-encrypted devices detected
             </div>
           {:else}
             <div class="divide-y divide-border">
               {#each status.encryption.devices as dev}
-                <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+                <div class="flex items-center justify-between px-4 py-2.5 text-[13px]">
                   <span class="font-mono">{dev.name}</span>
                   <div class="flex items-center gap-2">
                     <span class="text-xs text-muted-foreground">{dev.type}</span>
                     {#if dev.encrypted}
-                      <Lock size={12} class="text-green-400" />
+                      <Lock size={12} class="text-status-ok" />
                     {:else}
                       <Unlock size={12} class="text-muted-foreground" />
                     {/if}
@@ -710,12 +704,12 @@
       >
         <div class="flex items-center gap-3">
           {#if status.securityUpdates > 0 || status.kernelUpdates}
-            <AlertTriangle size={18} class="text-yellow-400" />
+            <AlertTriangle size={18} class="text-status-warn" />
           {:else}
-            <CheckCircle2 size={18} class="text-green-400" />
+            <CheckCircle2 size={18} class="text-status-ok" />
           {/if}
           <div class="text-left">
-            <p class="text-sm font-medium">Security Updates</p>
+            <p class="text-[13px] font-medium">Security Updates</p>
             <p class="text-xs text-muted-foreground">
               {#if status.securityUpdates > 0}
                 {status.securityUpdates} pending
@@ -736,8 +730,8 @@
 
       {#if expanded.updates && (status.securityUpdates > 0 || status.kernelUpdates)}
         <div class="px-4 py-3 border-t border-border">
-          <div class="rounded-lg bg-yellow-400/10 border border-yellow-400/30 p-3">
-            <p class="text-sm text-yellow-400 flex items-center gap-2">
+          <div class="rounded-lg bg-status-warn/10 border border-status-warn/30 p-3">
+            <p class="text-[13px] text-status-warn flex items-center gap-2">
               <AlertTriangle size={14} />
               {#if status.securityUpdates > 0}
                 {status.securityUpdates} security {status.securityUpdates === 1 ? 'update is' : 'updates are'} pending
@@ -766,7 +760,7 @@
             <Users size={18} class="text-muted-foreground" />
           {/if}
           <div class="text-left">
-            <p class="text-sm font-medium">Failed Logins</p>
+            <p class="text-[13px] font-medium">Failed Logins</p>
             <p class="text-xs text-muted-foreground">
               {#if status.failedLogins.length > 0}
                 {status.failedLogins.reduce((acc, l) => acc + l.count, 0)} failed attempts
@@ -786,17 +780,17 @@
       {#if expanded.logins}
         <div class="border-t border-border">
           {#if status.failedLogins.length === 0}
-            <div class="px-4 py-4 text-center text-sm text-muted-foreground">
+            <div class="px-4 py-4 text-center text-[13px] text-muted-foreground">
               No failed login attempts in the last 7 days
             </div>
           {:else}
             <div class="divide-y divide-border">
               {#each status.failedLogins as login}
-                <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+                <div class="flex items-center justify-between px-4 py-2.5 text-[13px]">
                   <span class="font-mono">{login.user}</span>
                   <div class="text-right">
                     <p class="text-xs text-muted-foreground">{login.count} attempts</p>
-                    <p class="text-[10px] text-muted-foreground/60">Latest: {login.latest}</p>
+                    <p class="text-[11px] text-muted-foreground">Latest: {login.latest}</p>
                   </div>
                 </div>
               {/each}
@@ -814,9 +808,9 @@
           class="flex items-center gap-3 flex-1 text-left"
           aria-label="Toggle automatic updates section"
         >
-          <RefreshCw size={18} class={status.autoUpdates?.enabled ? 'text-green-400' : status.autoUpdates?.installed ? 'text-yellow-400' : 'text-muted-foreground'} />
+          <RefreshCw size={18} class={status.autoUpdates?.enabled ? 'text-status-ok' : status.autoUpdates?.installed ? 'text-status-warn' : 'text-muted-foreground'} />
           <div class="text-left">
-            <p class="text-sm font-medium">Automatic Security Updates</p>
+            <p class="text-[13px] font-medium">Automatic Security Updates</p>
             <p class="text-xs text-muted-foreground">
               {#if status.autoUpdates?.enabled}
                 Enabled{status.autoUpdates.timerActive ? '' : ' · timer inactive'}
@@ -830,16 +824,7 @@
         </button>
         <div class="flex items-center gap-2">
           {#if status.autoUpdates?.installed}
-            <button
-              onclick={toggleAutoUpdates}
-              disabled={autoUpdatesToggling}
-              aria-label="Toggle automatic updates"
-              class="relative w-11 h-6 rounded-full transition-colors disabled:opacity-50
-                     {status.autoUpdates.enabled ? 'bg-green-400' : 'bg-secondary border border-border'}"
-            >
-              <span class="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform
-                           {status.autoUpdates.enabled ? 'translate-x-5' : ''}"></span>
-            </button>
+            <Toggle checked={status.autoUpdates.enabled} disabled={autoUpdatesToggling} aria-label="Automatic security updates" onCheckedChange={(v) => setAutoUpdates(v)} />
           {:else}
             <button
               onclick={() => installTool('unattended-upgrades')}
@@ -858,8 +843,8 @@
 
       {#if expanded.autoUpdates && status.autoUpdates?.installed && !status.autoUpdates.enabled}
         <div class="px-4 pb-4 pt-1 border-t border-border">
-          <div class="rounded-lg bg-yellow-400/10 border border-yellow-400/30 p-2.5 mt-2">
-            <p class="text-xs text-yellow-400 flex items-center gap-1.5">
+          <div class="rounded-lg bg-status-warn/10 border border-status-warn/30 p-2.5 mt-2">
+            <p class="text-xs text-status-warn flex items-center gap-1.5">
               <AlertTriangle size={12} />
               Security patches won't install themselves until this is enabled
             </p>
@@ -875,9 +860,9 @@
         class="w-full flex items-center justify-between px-4 py-3 hover:bg-secondary/50 transition-colors"
       >
         <div class="flex items-center gap-3">
-          <Bug size={18} class={scanResult && scanResult.infected > 0 ? 'text-destructive' : status.clamav?.installed ? 'text-green-400' : 'text-muted-foreground'} />
+          <Bug size={18} class={scanResult && scanResult.infected > 0 ? 'text-destructive' : status.clamav?.installed ? 'text-status-ok' : 'text-muted-foreground'} />
           <div class="text-left">
-            <p class="text-sm font-medium">Antivirus (ClamAV)</p>
+            <p class="text-[13px] font-medium">Antivirus (ClamAV)</p>
             <p class="text-xs text-muted-foreground">
               {#if scanning}
                 Scanning home directory…
@@ -910,7 +895,7 @@
               {installing.has('clamav') ? 'Installing…' : 'Install ClamAV'}
             </button>
             {#if installing.has('clamav') && installOutput}
-              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
+              <pre class="text-[11px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
             {/if}
           {:else}
             <div class="flex items-center justify-between pt-2 gap-2">
@@ -951,7 +936,7 @@
               {#if customExcludes.length > 0}
                 <div class="flex flex-wrap gap-1.5 mt-2">
                   {#each customExcludes as c}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-card border border-border flex items-center gap-1">
+                    <span class="text-[11px] px-1.5 py-0.5 rounded bg-card border border-border flex items-center gap-1">
                       {c}
                       <button
                         onclick={() => removeCustomExclude(c)}
@@ -981,7 +966,7 @@
             </div>
 
             {#if scanning || scanOutput}
-              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{scanOutput || 'Starting scan…'}</pre>
+              <pre class="text-[11px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{scanOutput || 'Starting scan…'}</pre>
             {/if}
 
             {#if scanResult && scanResult.infected > 0}
@@ -1006,10 +991,10 @@
         <div class="flex items-center gap-3">
           <ClipboardCheck
             size={18}
-            class={!lynisResult ? 'text-muted-foreground' : lynisResult.hardeningIndex !== null && lynisResult.hardeningIndex >= 70 ? 'text-green-400' : 'text-yellow-400'}
+            class={!lynisResult ? 'text-muted-foreground' : lynisResult.hardeningIndex !== null && lynisResult.hardeningIndex >= 70 ? 'text-status-ok' : 'text-status-warn'}
           />
           <div class="text-left">
-            <p class="text-sm font-medium">Hardening Audit (Lynis)</p>
+            <p class="text-[13px] font-medium">Hardening Audit (Lynis)</p>
             <p class="text-xs text-muted-foreground">
               {#if auditing}
                 Running audit…
@@ -1042,7 +1027,7 @@
               {installing.has('lynis') ? 'Installing…' : 'Install Lynis'}
             </button>
             {#if installing.has('lynis') && installOutput}
-              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
+              <pre class="text-[11px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{installOutput}</pre>
             {/if}
           {:else}
             <div class="flex items-center justify-between pt-2 gap-2">
@@ -1063,19 +1048,19 @@
             </div>
 
             {#if auditing || auditOutput}
-              <pre class="text-[10px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{auditOutput || 'Starting audit…'}</pre>
+              <pre class="text-[11px] font-mono bg-secondary/50 rounded-lg p-2.5 max-h-32 overflow-y-auto whitespace-pre-wrap">{auditOutput || 'Starting audit…'}</pre>
             {/if}
 
             {#if lynisResult}
               <div class="rounded-lg bg-secondary/50 p-2.5">
                 <div class="flex items-center justify-between mb-1">
                   <p class="text-xs text-muted-foreground">Hardening Index</p>
-                  <p class="text-sm font-medium">{lynisResult.hardeningIndex ?? '—'}/100</p>
+                  <p class="text-[13px] font-medium">{lynisResult.hardeningIndex ?? '—'}/100</p>
                 </div>
                 {#if lynisResult.hardeningIndex !== null}
                   <div class="w-full h-1.5 rounded-full bg-border overflow-hidden">
                     <div
-                      class="h-full rounded-full {lynisResult.hardeningIndex >= 70 ? 'bg-green-400' : lynisResult.hardeningIndex >= 50 ? 'bg-yellow-400' : 'bg-destructive'}"
+                      class="h-full rounded-full {lynisResult.hardeningIndex >= 70 ? 'bg-status-ok' : lynisResult.hardeningIndex >= 50 ? 'bg-status-warn' : 'bg-destructive'}"
                       style="width: {lynisResult.hardeningIndex}%"
                     ></div>
                   </div>
@@ -1117,12 +1102,12 @@
     <div class="rounded-xl border border-border bg-card overflow-hidden">
       <div class="flex items-center gap-2 px-4 py-3">
         <ClipboardCheck size={18} class="text-muted-foreground" />
-        <p class="text-sm font-medium">Additional Hardening</p>
+        <p class="text-[13px] font-medium">Additional Hardening</p>
       </div>
       <div class="divide-y divide-border border-t border-border">
         <div class="flex items-center justify-between px-4 py-3 gap-2">
           <div>
-            <p class="text-sm">Residual Packages</p>
+            <p class="text-[13px]">Residual Packages</p>
             <p class="text-xs text-muted-foreground">
               {status.residualPackages > 0
                 ? `${status.residualPackages} removed package${status.residualPackages === 1 ? '' : 's'} still have leftover config files`
@@ -1143,13 +1128,13 @@
               {/if}
             </button>
           {:else}
-            <CheckCircle2 size={16} class="text-green-400 shrink-0" />
+            <CheckCircle2 size={16} class="text-status-ok shrink-0" />
           {/if}
         </div>
 
         <div class="flex items-center justify-between px-4 py-3 gap-2">
           <div>
-            <p class="text-sm">Unused Network Protocols</p>
+            <p class="text-[13px]">Unused Network Protocols</p>
             <p class="text-xs text-muted-foreground">
               {status.protocolsBlacklisted ? 'dccp/sctp/rds/tipc blocked from loading' : 'dccp/sctp/rds/tipc can still load'}
             </p>
@@ -1168,11 +1153,24 @@
               {/if}
             </button>
           {:else}
-            <CheckCircle2 size={16} class="text-green-400 shrink-0" />
+            <CheckCircle2 size={16} class="text-status-ok shrink-0" />
           {/if}
         </div>
       </div>
     </div>
 
   {/if}
-</div>
+  </div>
+
+  <ConfirmDialog
+    open={confirmSshStop}
+    onOpenChange={(open) => { if (!open) confirmSshStop = false }}
+    title="Stop the SSH server?"
+    description="Remote sessions will be dropped and new connections refused until it is started again."
+    busy={sshToggling}
+    actions={[
+      { label: 'Cancel', variant: 'secondary', onClick: () => { confirmSshStop = false } },
+      { label: 'Stop SSH', variant: 'destructive', onClick: () => setSsh(false) },
+    ]}
+  />
+</Page>
