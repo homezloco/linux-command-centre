@@ -37,7 +37,7 @@
 
 <BitsDialog.Root {open} {onOpenChange}>
   <BitsDialog.Portal to={overlayPortalTarget()}>
-    <BitsDialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+    <BitsDialog.Overlay class="fixed inset-0 z-50 pointer-events-auto bg-black/50" />
     <BitsDialog.Content
       {onEscapeKeydown}
       {onInteractOutside}

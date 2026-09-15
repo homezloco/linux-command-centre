@@ -254,6 +254,16 @@
 .drag-region  { -webkit-app-region: drag; }
 .no-drag      { -webkit-app-region: no-drag; }
 
+/* Window-control overlay insets. --wco-right default 140px is stylesheet-only;
+   JS may set it to 0 after measuring (left-side buttons). */
+.app-header {
+  height: 2.75rem; /* 44px; not rem-tied to ui-scale */
+  padding-right: max(0.75rem, var(--wco-right));
+}
+.sidebar-brand {
+  padding-left: max(1rem, var(--wco-left));
+}
+
 /* uPlot font */
 .uplot, .uplot *, .uplot canvas { @apply font-sans; }
 

@@ -5,6 +5,8 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
+  let { visible = true }: { visible?: boolean } = $props()
+
   type LogEntry = {
     pid: number | null; priority: number; unit: string
     message: string; timestamp: number; identifier: string; cursor: string
@@ -77,10 +79,6 @@
 
   function toggleLive() {
     liveMode = !liveMode
-    clearInterval(interval)
-    if (liveMode) {
-      interval = setInterval(() => load(true), 3000)
-    }
   }
 
   function priorityClass(p: number): string {
@@ -100,6 +98,11 @@
   $effect(() => {
     void filterUnit; void filterPriority; void filterSince
     load(true)
+  })
+
+  $effect(() => {
+    if (!visible || !liveMode) { clearInterval(interval); interval = undefined; return }
+    if (!interval) interval = setInterval(() => load(true), 3000)
   })
 
   onMount(() => { load(); loadUnits() })

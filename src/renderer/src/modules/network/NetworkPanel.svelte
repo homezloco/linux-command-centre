@@ -5,6 +5,8 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
+  let { visible = true }: { visible?: boolean } = $props()
+
   type NetInterface = {
     name: string; state: string; type: string; mac: string | null
     ipv4: string | null; ipv6: string | null; isDefault: boolean
@@ -63,7 +65,10 @@
   onMount(() => {
     load()
     refreshSpeed()
-    speedInterval = setInterval(refreshSpeed, 1000)
+  })
+  $effect(() => {
+    if (!visible) { clearInterval(speedInterval); speedInterval = undefined; return }
+    if (!speedInterval) speedInterval = setInterval(refreshSpeed, 1000)
   })
   onDestroy(() => clearInterval(speedInterval))
 </script>

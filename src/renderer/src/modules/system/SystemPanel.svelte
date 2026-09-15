@@ -6,6 +6,8 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
+  let { visible = true }: { visible?: boolean } = $props()
+
   type SystemStatus = {
     hostname: string; osName: string; kernel: string; arch: string
     uptime: { days: number; hours: number; minutes: number; totalSeconds: number }
@@ -205,7 +207,10 @@
 
   onMount(() => {
     load(); loadSpecs(); loadPackageHealth(); loadBootTime(); loadSysctl()
-    interval = setInterval(() => load(true), 5000)
+  })
+  $effect(() => {
+    if (!visible) { clearInterval(interval); interval = undefined; return }
+    if (!interval) interval = setInterval(() => load(true), 5000)
   })
   onDestroy(() => clearInterval(interval))
 

@@ -8,6 +8,8 @@
   import Spinner from '$lib/Spinner.svelte'
   import Alert   from '$lib/Alert.svelte'
 
+  let { visible = true }: { visible?: boolean } = $props()
+
   type Process = {
     pid: number; user: string; cpu: number; mem: number
     vsz: number; rss: number; stat: string; command: string; name: string
@@ -98,7 +100,11 @@
   onMount(() => {
     mounted = true
     load()
-    interval = setInterval(() => load(true, true), 4000)
+  })
+
+  $effect(() => {
+    if (!visible) { clearInterval(interval); interval = undefined; return }
+    if (!interval) interval = setInterval(() => load(true, true), 4000)
   })
 
   $effect(() => {
