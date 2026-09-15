@@ -3,8 +3,9 @@
 
   export type PageProps = {
     description?: string
-    width?: 'narrow' | 'wide'
-    fill?: boolean
+    width?: 'narrow' | 'wide' // default 'wide'
+    /** Column flex (`h-full min-h-0`) so the panel owns the inner scroller. Logs only. */
+    fill?: boolean // default false
     class?: string
     children: Snippet
     actions?: Snippet
