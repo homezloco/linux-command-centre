@@ -198,6 +198,7 @@
   }
 
   type Wco = {
+    visible?: boolean
     getTitlebarAreaRect?: () => DOMRect
     addEventListener: (type: 'geometrychange', listener: () => void) => void
     removeEventListener: (type: 'geometrychange', listener: () => void) => void
@@ -206,7 +207,9 @@
   function syncWco(): void {
     const overlay = (navigator as Navigator & { windowControlsOverlay?: Wco }).windowControlsOverlay
     if (!overlay?.getTitlebarAreaRect) return
+    if (overlay.visible === false) return
     const r = overlay.getTitlebarAreaRect()
+    if (r.width === 0 && r.height === 0) return
     const right = Math.max(0, window.innerWidth - r.x - r.width)
     const left = Math.max(0, r.x)
     document.documentElement.style.setProperty('--wco-right', `${right}px`)
@@ -354,7 +357,7 @@
             <li>
               <button
                 type="button"
-                aria-expanded={!isCollapsed}
+                aria-expanded={filtering || !isCollapsed}
                 onclick={() => toggleCollapsed(group.label)}
                 class="flex w-full items-center gap-1 px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground {hoverBg} rounded-[5px]"
               >
@@ -392,7 +395,8 @@
                       </a>
                       <button
                         type="button"
-                        aria-label="Pin {mod.label}"
+                        aria-label={pinned ? `Unpin ${mod.label}` : `Pin ${mod.label}`}
+                        aria-pressed={pinned}
                         onclick={(e) => onPinClick(e, mod.id)}
                         class="absolute right-1 z-10 rounded p-0.5 text-muted-foreground {hoverBg} hover:text-foreground
                                {pinned
@@ -429,10 +433,11 @@
         <div class="w-6 h-6 rounded-md bg-card border border-border flex items-center justify-center shrink-0">
           <current.icon size={13} class="text-primary/80" />
         </div>
-        <h1 class="text-[13px] font-semibold text-foreground truncate">{current.label}</h1>
+        <h1 tabindex="-1" class="text-[13px] font-semibold text-foreground truncate">{current.label}</h1>
       </div>
       <button
         type="button"
+        id="lcc-palette-chip"
         class="no-drag shrink-0 text-[11px] text-muted-foreground border border-border/40 rounded px-1.5 py-0.5 font-mono hover:text-foreground hover:border-border"
         aria-label="Open command palette"
         aria-keyshortcuts="Control+K"

@@ -77,20 +77,27 @@ function syncHash(id: string): void {
   if (location.hash !== next) location.hash = next
 }
 
-function recordRecent(id: string): void {
+/** Record the panel being left so it stays in recents/cache; drop the destination so Recents does not duplicate the current row. */
+function recordLeave(fromId: string, toId: string): void {
   const pinIds = get(pins)
   recents.update((r) => {
-    if (pinIds.includes(id)) return r.filter((x) => x !== id && !pinIds.includes(x)).slice(0, RECENT_MAX)
-    const next = [id, ...r.filter((x) => x !== id && !pinIds.includes(x))]
-    return next.slice(0, RECENT_MAX)
+    const next: string[] = []
+    if (fromId && fromId !== toId && !pinIds.includes(fromId) && known.has(fromId)) next.push(fromId)
+    for (const x of r) {
+      if (x === fromId || x === toId || pinIds.includes(x) || next.includes(x) || !known.has(x)) continue
+      next.push(x)
+      if (next.length >= RECENT_MAX) break
+    }
+    return next
   })
 }
 
 function onHashChange(): void {
   const id = location.hash.replace(/^#/, '')
   if (!id || !known.has(id) || id === get(active)) return
+  const prev = get(active)
   active.set(id)
-  recordRecent(id)
+  recordLeave(prev, id)
   persist()
 }
 
@@ -102,7 +109,7 @@ export function initNav(ids: Iterable<string>): void {
   active.set(start)
   collapsed.set(prefs.collapsed)
   pins.set(prefs.pins)
-  recents.set(prefs.recents)
+  recents.set(prefs.recents.filter((id) => id !== start))
   syncHash(start)
   persist()
   if (!listening) {
@@ -113,9 +120,10 @@ export function initNav(ids: Iterable<string>): void {
 
 export function setActive(id: string): void {
   if (!known.has(id)) return
-  if (id !== get(active)) {
+  const prev = get(active)
+  if (id !== prev) {
     active.set(id)
-    recordRecent(id)
+    recordLeave(prev, id)
   }
   syncHash(id)
   persist()

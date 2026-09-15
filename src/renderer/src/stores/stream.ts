@@ -1,4 +1,4 @@
-import { writable, type Readable } from 'svelte/store'
+import { readable, type Readable } from 'svelte/store'
 
 const PORT = window.electronAPI?.streamPort ?? 52341
 
@@ -58,9 +58,7 @@ export function subscribeStream<T>(channel: string, callback: (data: T) => void)
   }
 }
 
-/** Create a Svelte readable store backed by a stream channel */
+/** Create a Svelte readable store backed by a stream channel. Unsubscribes the WS channel when the last subscriber leaves. */
 export function streamStore<T>(channel: string, initial: T): Readable<T> {
-  const { subscribe, set } = writable<T>(initial)
-  subscribeStream<T>(channel, set)
-  return { subscribe }
+  return readable<T>(initial, (set) => subscribeStream<T>(channel, set))
 }

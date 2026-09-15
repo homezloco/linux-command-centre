@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onDestroy } from 'svelte'
   import { subscribeStream } from '$stores/stream'
   import { tempColor } from '$lib/utils'
   import { Wind, Cpu, Thermometer, AlertTriangle, Activity } from 'lucide-svelte'
   import Spinner from '$lib/Spinner.svelte'
+
+  let { visible = true }: { visible?: boolean } = $props()
 
   type ProcessInfo = { name: string; pid: number; cpu: number; mem: number }
 
@@ -34,15 +36,21 @@
     history.length ? 96 - ((history[history.length - 1].v - graphMin) / graphRange) * 96 : 96
   )
 
-  const unsub = subscribeStream<ThermalSnapshot>('thermal', (data) => {
-    snapshot = data
-    const pkg = data.temps.find(t => t.label.toLowerCase().includes('package'))
-    if (pkg) {
-      history = [...history.slice(-59), { t: data.timestamp, v: pkg.celsius }]
+  let unsub: (() => void) | undefined
+
+  $effect(() => {
+    if (!visible) { unsub?.(); unsub = undefined; return }
+    if (!unsub) {
+      unsub = subscribeStream<ThermalSnapshot>('thermal', (data) => {
+        snapshot = data
+        const pkg = data.temps.find(t => t.label.toLowerCase().includes('package'))
+        if (pkg) {
+          history = [...history.slice(-59), { t: data.timestamp, v: pkg.celsius }]
+        }
+      })
     }
   })
-
-  onDestroy(unsub)
+  onDestroy(() => unsub?.())
 
   function pkgTemp(s: ThermalSnapshot): number {
     return s.temps.find(t => t.label.toLowerCase().includes('package'))?.celsius

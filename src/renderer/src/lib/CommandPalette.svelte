@@ -50,6 +50,26 @@
     cursor = 0
   })
 
+  function isRestorable(el: HTMLElement | null): el is HTMLElement {
+    if (!el || !el.isConnected) return false
+    if (el.closest('[inert], [hidden]')) return false
+    return true
+  }
+
+  function restoreFocus(prev: HTMLElement | null): void {
+    if (isRestorable(prev)) {
+      prev.focus()
+      return
+    }
+    const chip = document.getElementById('lcc-palette-chip')
+    if (chip instanceof HTMLElement) {
+      chip.focus()
+      return
+    }
+    const heading = document.querySelector('main h1')
+    if (heading instanceof HTMLElement) heading.focus()
+  }
+
   function select(id: string) {
     onselect(id)
     closePalette()
@@ -136,7 +156,7 @@
     tick().then(() => inputEl?.focus())
     return () => {
       query = ''
-      prev?.focus()
+      restoreFocus(prev)
     }
   })
 
@@ -166,6 +186,7 @@
         bind:value={query}
         role="combobox"
         aria-expanded="true"
+        aria-autocomplete="list"
         aria-controls="palette-listbox"
         aria-activedescendant={results[cursor] ? `palette-opt-${results[cursor].id}` : undefined}
         autocomplete="off"
