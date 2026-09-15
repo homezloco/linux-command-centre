@@ -47,18 +47,20 @@
   <div class="space-y-4 max-w-sm">
 
     {#snippet toggleRow(label: string, desc: string, key: keyof A11yStatus, disclaimer?: string)}
+      {@const discId = disclaimer ? `a11y-disc-${key}` : undefined}
       <div class="flex items-center justify-between">
         <div class="flex-1 min-w-0 pr-4">
           <p class="text-sm">{label}</p>
           <p class="text-xs text-muted-foreground">{desc}</p>
           {#if disclaimer}
-            <p class="text-xs text-muted-foreground">{disclaimer}</p>
+            <p id={discId} class="text-xs text-muted-foreground">{disclaimer}</p>
           {/if}
         </div>
         <button
           onclick={() => set(key, !status![key])}
           disabled={saving}
           aria-label="Toggle {label}"
+          aria-describedby={discId}
           class="relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50
                  {status![key] ? 'bg-primary' : 'bg-secondary border border-border'}"
         >

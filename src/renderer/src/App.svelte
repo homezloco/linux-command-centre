@@ -448,26 +448,28 @@
         Ctrl+K
       </button>
     </header>
-    <div class="page-zoom flex-1 min-h-0 flex flex-col relative" style="zoom: var(--ui-scale, 1)">
-      <div
-        class="page-body flex-1 min-h-0 {pageFill
-          ? 'overflow-hidden px-5 pt-5 pb-0'
-          : 'overflow-y-auto p-5'}"
-      >
-        {#each cache as id (id)}
-          {@const Comp = componentById.get(id)}
-          {#if Comp}
-            <div
-              hidden={$active !== id}
-              inert={$active !== id}
-              class={id === 'logs' ? 'h-full min-h-0' : undefined}
-            >
-              <Comp visible={$active === id} />
-            </div>
-          {/if}
-        {/each}
+    <div class="flex-1 min-h-0 overflow-hidden">
+      <div class="page-zoom flex flex-col relative">
+        <div
+          class="page-body flex-1 min-h-0 {pageFill
+            ? 'overflow-hidden px-5 pt-5 pb-0'
+            : 'overflow-y-auto p-5'}"
+        >
+          {#each cache as id (id)}
+            {@const Comp = componentById.get(id)}
+            {#if Comp}
+              <div
+                hidden={$active !== id}
+                inert={$active !== id}
+                class={id === 'logs' ? 'h-full min-h-0' : undefined}
+              >
+                <Comp visible={$active === id} />
+              </div>
+            {/if}
+          {/each}
+        </div>
+        <div id="lcc-overlay-root" class="absolute inset-0 pointer-events-none z-50"></div>
       </div>
-      <div id="lcc-overlay-root" class="absolute inset-0 pointer-events-none z-50"></div>
     </div>
   </main>
 </div>

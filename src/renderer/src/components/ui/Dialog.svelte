@@ -37,13 +37,13 @@
 
 <BitsDialog.Root {open} {onOpenChange}>
   <BitsDialog.Portal to={overlayPortalTarget()}>
-    <BitsDialog.Overlay class="fixed inset-0 z-50 pointer-events-auto bg-black/50" />
+    <BitsDialog.Overlay class="absolute inset-0 z-50 pointer-events-auto bg-black/50" />
     <BitsDialog.Content
       {onEscapeKeydown}
       {onInteractOutside}
       trapFocus
       class={cn(
-        'fixed left-1/2 top-1/2 z-50 pointer-events-auto w-full max-w-md -translate-x-1/2 -translate-y-1/2',
+        'absolute left-1/2 top-1/2 z-50 pointer-events-auto w-full max-w-md -translate-x-1/2 -translate-y-1/2',
         'rounded-xl border border-border bg-card p-5 shadow-xl space-y-3',
         className,
       )}

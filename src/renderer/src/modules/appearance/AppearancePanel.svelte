@@ -129,7 +129,7 @@
       </div>
 
       <div class="space-y-2 pt-1">
-        <p class="text-sm font-medium">Command Centre text size</p>
+        <p class="text-[13px] font-medium">Command Centre text size</p>
         <SegmentedControl
           value={$uiScale}
           onChange={(v) => { $uiScale = v }}
@@ -147,7 +147,7 @@
           onchange={(e) => { $userReduceFlag = e.currentTarget.checked }}
         />
         <span>
-          <span class="block text-sm">Reduce visual effects</span>
+          <span class="block text-[13px]">Reduce visual effects</span>
           {#if $osPrefersReducedMotion}
             <span class="block text-xs text-muted-foreground">Required by the desktop (Reduce animations)</span>
           {/if}
@@ -250,18 +250,20 @@
       <!-- Text scale -->
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <p class="text-sm font-medium flex items-center gap-2">
+          <label for="gnome-text-scale" class="text-sm font-medium flex items-center gap-2">
             <Type size={14} class="text-muted-foreground" /> Desktop text scale (GNOME)
-          </p>
+          </label>
           <span class="text-sm font-medium tabular-nums">{textScale.toFixed(2)}×</span>
         </div>
         <div class="flex justify-between text-xs text-muted-foreground mb-1">
           <span>0.75×</span><span>1.00×</span><span>1.50×</span><span>2.00×</span>
         </div>
         <input
+          id="gnome-text-scale"
           type="range" min="0.75" max="2.0" step="0.05"
           bind:value={textScale}
           oninput={mark}
+          aria-valuetext="{textScale.toFixed(2)}×"
           class="w-full accent-primary"
         />
       </div>
