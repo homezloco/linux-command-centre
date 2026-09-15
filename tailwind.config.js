@@ -26,7 +26,13 @@ module.exports = {
           foreground: 'hsl(var(--accent-foreground))'
         },
         destructive: {
-          DEFAULT: 'hsl(var(--destructive))'
+          DEFAULT: 'hsl(var(--destructive))',
+          foreground: 'hsl(var(--destructive-foreground))'
+        },
+        status: {
+          ok: 'hsl(var(--status-ok))',
+          warn: 'hsl(var(--status-warn))',
+          fail: 'hsl(var(--status-fail))'
         },
         card: {
           DEFAULT: 'hsl(var(--card))',

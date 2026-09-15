@@ -1,4 +1,4 @@
-import { ipcMain, net, app, clipboard } from 'electron'
+import { ipcMain, net, app, clipboard, BrowserWindow, nativeTheme } from 'electron'
 import { spawn } from 'child_process'
 import { sysread, sysexists, run, runFile } from './shell'
 import { privilegedOp, privilegedOpStreaming, privilegedOpWithStdin } from './privilege'
@@ -9,6 +9,7 @@ import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
+import type { TitleBarOverlayOpts } from '../shared/electron-api'
 
 interface UpdateItem {
   label: string
@@ -2788,6 +2789,15 @@ export async function registerIpcHandlers(): Promise<void> {
     const osName = getVal('PRETTY_NAME') || getVal('NAME') || 'Linux'
     const { app } = await import('electron')
     return { version: app.getVersion(), osName }
+  })
+
+  ipcMain.handle('app:setTitleBarOverlay', (_, opts: TitleBarOverlayOpts) => {
+    nativeTheme.themeSource = opts.source
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        win.setTitleBarOverlay({ color: opts.color, symbolColor: opts.symbolColor, height: 40 })
+      } catch { /* Linux can throw if overlay unsupported */ }
+    }
   })
 
   // ── VPN ────────────────────────────────────────────────────────────────────

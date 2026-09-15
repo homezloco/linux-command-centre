@@ -11,8 +11,8 @@
 
   const styles: Record<ToastVariant, string> = {
     info:    'border-primary/30 bg-primary/10 text-primary',
-    success: 'border-green-500/30 bg-green-500/10 text-green-400',
-    warning: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400',
+    success: 'border-status-ok/30 bg-status-ok/10 text-status-ok',
+    warning: 'border-status-warn/30 bg-status-warn/10 text-status-warn',
     error:   'border-destructive/30 bg-destructive/10 text-destructive',
   }
 </script>

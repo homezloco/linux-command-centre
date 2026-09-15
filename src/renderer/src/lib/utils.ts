@@ -16,7 +16,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function tempColor(celsius: number): string {
-  if (celsius >= 85) return 'text-red-400'
-  if (celsius >= 70) return 'text-yellow-400'
-  return 'text-green-400'
+  if (celsius >= 85) return 'text-status-fail'
+  if (celsius >= 70) return 'text-status-warn'
+  return 'text-status-ok'
 }
