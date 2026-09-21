@@ -1,0 +1,49 @@
+name: CI
+
+# Improvement-loop notes (see loop.md):
+# - `lcc/**` push triggers let loop branches (`lcc/loop-*`) be verified
+#   by CI without opening a PR.
+# - These are the repo's only cheap, hermetic checks. `npm run check`
+#   covers both renderer (svelte-check) and main/preload (tsc);
+#   `npm run build` is the electron-vite bundle, which needs neither the
+#   Electron binary nor secrets.
+# - Deliberately excluded (cannot run in CI): launching Electron / `npm
+#   run dev` (needs a display and `npx install-electron`), `npm run
+#   package` / snapcraft (heavy packaging, covered by release.yml on
+#   tags), and every privileged helper op (needs pkexec/polkit and a real
+#   Linux system). Changes affecting those must be flagged as untested in
+#   the loop report.
+
+on:
+  push:
+    branches: [main, "lcc/**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches release.yml and snap/snapcraft.yaml (node/20/stable).
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (svelte-check + tsc)
+        run: npm run check
+
+      - name: Build (electron-vite)
+        run: npm run build
