@@ -2,8 +2,8 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/utils'
   import { toasts } from '$stores/toasts'
-  import { Page, Card, Skeleton, Button, Listbox, SegmentedControl } from '$ui'
-  import { Zap, Battery, Gauge, Clock, Power, Monitor, RefreshCw } from 'lucide-svelte'
+  import { Page, Card, Skeleton, Button, Listbox, SegmentedControl, Toggle } from '$ui'
+  import { Zap, Battery, BatteryCharging, Gauge, Clock, Power, Monitor, RefreshCw } from 'lucide-svelte'
   import Alert from '$lib/Alert.svelte'
 
   type PowerStatus = {
@@ -15,6 +15,7 @@
     powerButton: string
     batteryTime: number | null
     batteryPower: number | null
+    batteryGuard: { installed: boolean; supported: boolean; capped: boolean }
   }
 
   const TITLE = 'Power'
@@ -88,6 +89,9 @@
     gnomeSet('power:setLidClose', [ac, battery], 'Lid close action updated')
   const setPowerButton = (action: string) =>
     gnomeSet('power:setPowerButton', [action], 'Power button action updated')
+
+  const setBatteryGuard = (enabled: boolean) =>
+    gnomeSet('power:setBatteryGuard', [enabled], enabled ? 'Battery guard enabled' : 'Battery guard disabled')
 
   function formatTime(minutes: number): string {
     const hours = Math.floor(minutes / 60)
@@ -220,6 +224,30 @@
         <Listbox id="power-button" value={status.powerButton} options={POWER_BUTTON_ACTIONS}
           onChange={(v) => setPowerButton(v)} />
       </Card>
+
+      <!-- Battery guard -->
+      {#if status.batteryGuard.supported}
+        <Card class="flex items-start gap-3">
+          <BatteryCharging size={18} class={status.batteryGuard.installed ? 'text-status-ok' : 'text-muted-foreground'} />
+          <div class="flex-1 min-w-0 space-y-0.5">
+            <p id="battery-guard-label" class="text-[13px] font-medium">Battery guard</p>
+            <p class="text-xs text-muted-foreground">
+              Cap CPU speed when the battery drops to 20% or below, restore it above 22%.
+              Runs even when the app is closed.
+            </p>
+            {#if status.batteryGuard.installed}
+              <p class="text-[11px] font-medium {status.batteryGuard.capped ? 'text-status-warn' : 'text-status-ok'}">
+                {status.batteryGuard.capped ? 'CPU capped — battery is low' : 'Armed — CPU at full speed'}
+              </p>
+            {/if}
+          </div>
+          <Toggle
+            checked={status.batteryGuard.installed}
+            aria-labelledby="battery-guard-label"
+            onCheckedChange={(v) => setBatteryGuard(v)}
+          />
+        </Card>
+      {/if}
     {/if}
   </div>
 </Page>

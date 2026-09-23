@@ -90,6 +90,7 @@ export const IPC_CHANNELS = [
   'notifications:set',
   'notifications:status',
   'power:set',
+  'power:setBatteryGuard',
   'power:setIdleDelay',
   'power:setLidClose',
   'power:setPowerButton',

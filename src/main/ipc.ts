@@ -4,7 +4,7 @@ import { sysread, sysexists, run, runFile } from './shell'
 import { privilegedOp, privilegedOpStreaming, privilegedOpWithStdin } from './privilege'
 import { selectProfile, evaluateProfile, type HwCheck } from './hardware-profiles'
 import { runDiagnostics } from './claude'
-import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'fs'
 import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -191,7 +191,8 @@ export async function registerIpcHandlers(): Promise<void> {
         lidCloseBattery: lidCloseBattery.replace(/'/g, ''),
         powerButton: powerButton.replace(/'/g, ''),
         batteryTime,
-        batteryPower
+        batteryPower,
+        batteryGuard: batteryGuardStatus()
       }
     } catch {
       const profile = await sysread('/sys/firmware/acpi/platform_profile')
@@ -204,9 +205,15 @@ export async function registerIpcHandlers(): Promise<void> {
         lidCloseBattery: 'suspend',
         powerButton: 'interactive',
         batteryTime: null,
-        batteryPower: null
+        batteryPower: null,
+        batteryGuard: batteryGuardStatus()
       }
     }
+  })
+
+  ipcMain.handle('power:setBatteryGuard', async (_, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid value')
+    return privilegedOp(enabled ? 'battery-guard-install' : 'battery-guard-uninstall')
   })
 
   ipcMain.handle('power:set', async (_, profile: string) => {
@@ -4184,6 +4191,28 @@ async function findBacklight(): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+function batteryGuardStatus(): { installed: boolean; supported: boolean; capped: boolean } {
+  const installed = existsSync('/etc/systemd/system/lcc-battery-guard.service')
+  const supported = existsSync('/sys/devices/system/cpu/cpufreq') || existsSync('/sys/devices/system/cpu/intel_pstate')
+  let capped = false
+  try {
+    capped = existsSync('/sys/devices/system/cpu/intel_pstate/no_turbo')
+      && readFileSync('/sys/devices/system/cpu/intel_pstate/no_turbo', 'utf8').trim() === '1'
+  } catch { /* absent */ }
+  if (!capped) {
+    try {
+      const p = readdirSync('/sys/devices/system/cpu/cpufreq').find(e => e.startsWith('policy'))
+      if (p) {
+        const dir = `/sys/devices/system/cpu/cpufreq/${p}`
+        const max = parseInt(readFileSync(`${dir}/scaling_max_freq`, 'utf8').trim() || '0')
+        const top = parseInt(readFileSync(`${dir}/cpuinfo_max_freq`, 'utf8').trim() || '0')
+        if (top > 0 && max > 0 && max < top) capped = true
+      }
+    } catch { /* no cpufreq */ }
+  }
+  return { installed, supported, capped }
 }
 
 export async function collectThermal(): Promise<ThermalSnapshot> {

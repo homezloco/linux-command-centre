@@ -8,7 +8,7 @@
 'use strict'
 
 const { execFileSync, execSync, spawnSync, spawn } = require('child_process')
-const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync, mkdtempSync, rmSync } = require('fs')
+const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync, mkdtempSync, rmSync, mkdirSync } = require('fs')
 
 const [, , operation, ...args] = process.argv
 
@@ -30,6 +30,82 @@ function findBacklight() {
   if (!existsSync('/sys/class/backlight')) return null
   const entries = readdirSync('/sys/class/backlight')
   return entries.length > 0 ? `/sys/class/backlight/${entries[0]}` : null
+}
+
+// ── Battery guard ────────────────────────────────────────────────────────────
+// Root-owned, udev-triggered CPU cap: engages at ≤20% battery, releases at
+// ≥22% (hysteresis so a battery hovering at the boundary doesn't flap). Runs
+// independent of the app — no pkexec prompt per transition; auth happens once
+// at install/uninstall.
+const BATTERY_GUARD_SCRIPT = `#!/bin/sh
+# lcc-battery-guard — cap CPU frequency/boost while battery charge is at or
+# below 20%, restore at 22%+. Triggered by udev on battery change events and
+# once at boot. Idempotent: safe to run repeatedly.
+LOW=20
+HIGH=22
+
+bat=$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -n 1)
+case "$bat" in ''|*[!0-9]*) exit 0 ;; esac
+
+cap() {
+    [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [ -d "$p" ] || continue
+        max=$(cat "$p/cpuinfo_max_freq" 2>/dev/null)
+        min=$(cat "$p/cpuinfo_min_freq" 2>/dev/null)
+        case "$max$min" in *[!0-9]*|'') continue ;; esac
+        new=$(( max * 60 / 100 ))
+        [ "$new" -lt "$min" ] && new=$min
+        echo "$new" > "$p/scaling_max_freq" 2>/dev/null
+    done
+}
+
+uncap() {
+    [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo
+    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [ -d "$p" ] || continue
+        cat "$p/cpuinfo_max_freq" > "$p/scaling_max_freq" 2>/dev/null
+    done
+}
+
+if [ "$bat" -le "$LOW" ]; then
+    cap
+elif [ "$bat" -ge "$HIGH" ]; then
+    uncap
+fi
+exit 0
+`
+
+const BATTERY_GUARD_SERVICE = `[Unit]
+Description=LCC battery guard — cap CPU when battery is low
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/lcc-battery-guard.sh
+
+[Install]
+WantedBy=multi-user.target
+`
+
+const BATTERY_GUARD_RULE = `# LCC battery guard — evaluate the CPU cap on every battery state change.
+ACTION!="remove", SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Battery", RUN+="/bin/systemctl start --no-block lcc-battery-guard.service"
+`
+
+const BATTERY_GUARD_FILES = [
+  '/usr/local/libexec/lcc-battery-guard.sh',
+  '/etc/systemd/system/lcc-battery-guard.service',
+  '/etc/udev/rules.d/99-lcc-battery-guard.rules',
+]
+
+function uncapCpuNow() {
+  try { syswrite('/sys/devices/system/cpu/intel_pstate/no_turbo', 0) } catch { /* absent */ }
+  try { syswrite('/sys/devices/system/cpu/cpufreq/boost', 1) } catch { /* absent */ }
+  for (const p of readdirSync('/sys/devices/system/cpu/cpufreq').filter(e => e.startsWith('policy'))) {
+    const dir = `/sys/devices/system/cpu/cpufreq/${p}`
+    try { syswrite(`${dir}/scaling_max_freq`, sysread(`${dir}/cpuinfo_max_freq`)) } catch { /* ignore */ }
+  }
 }
 
 function runApt(args, env) {
@@ -210,6 +286,34 @@ const ops = {
       throw new Error('No power profile mechanism found')
     }
     console.log(`Power profile set to ${profile}`)
+  },
+
+  // Install the battery guard: script + oneshot service + udev trigger, then
+  // evaluate the current battery immediately (covers a battery already under
+  // 20% at install time). Deliberately takes no arguments — a caller-supplied
+  // path or threshold would be an arbitrary-root-write hole.
+  'battery-guard-install'() {
+    mkdirSync('/usr/local/libexec', { recursive: true })
+    writeFileSync(BATTERY_GUARD_FILES[0], BATTERY_GUARD_SCRIPT, { mode: 0o755 })
+    writeFileSync(BATTERY_GUARD_FILES[1], BATTERY_GUARD_SERVICE, { mode: 0o644 })
+    writeFileSync(BATTERY_GUARD_FILES[2], BATTERY_GUARD_RULE, { mode: 0o644 })
+    execFileSync('systemctl', ['daemon-reload'])
+    execFileSync('systemctl', ['enable', 'lcc-battery-guard.service'])
+    execFileSync('udevadm', ['control', '--reload-rules'])
+    try { execFileSync('systemctl', ['start', 'lcc-battery-guard.service']) } catch { /* evaluate later via udev */ }
+    console.log('Battery guard installed — CPU caps at 20% battery or below, restores at 22%+')
+  },
+
+  'battery-guard-uninstall'() {
+    try { execFileSync('systemctl', ['stop', 'lcc-battery-guard.service']) } catch { /* not running */ }
+    try { execFileSync('systemctl', ['disable', 'lcc-battery-guard.service']) } catch { /* not enabled */ }
+    uncapCpuNow()
+    for (const f of BATTERY_GUARD_FILES) {
+      try { unlinkSync(f) } catch { /* already gone */ }
+    }
+    try { execFileSync('systemctl', ['daemon-reload']) } catch { /* ignore */ }
+    try { execFileSync('udevadm', ['control', '--reload-rules']) } catch { /* ignore */ }
+    console.log('Battery guard removed, CPU limits restored')
   },
 
   'grub-set'(...pairs) {
