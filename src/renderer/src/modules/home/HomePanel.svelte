@@ -37,6 +37,7 @@
   }
   type ThermalSnapshot = {
     temps: { label: string; celsius: number }[]
+    throttling?: { throttled: boolean; summary: string } | null
   }
   type NetInterface = {
     name: string; state: string; ipv4: string | null; isDefault: boolean
@@ -377,7 +378,11 @@
               <p class="text-xl font-semibold tabular-nums mt-1 {tempColor(hottest.celsius)}">
                 {hottest.celsius.toFixed(0)}°C
               </p>
-              <p class="text-[11px] text-muted-foreground truncate mt-0.5">{hottest.label}</p>
+              {#if thermal?.throttling?.throttled}
+                <p class="text-[11px] font-medium text-status-warn truncate mt-0.5">Throttling</p>
+              {:else}
+                <p class="text-[11px] text-muted-foreground truncate mt-0.5">{hottest.label}</p>
+              {/if}
             {:else}
               <p class="text-xl font-semibold mt-1">—</p>
             {/if}

@@ -20,7 +20,7 @@
     turboEnabled: boolean
   }
   type ThermalExtras = {
-    throttling: { throttled: boolean; type: string } | null
+    throttling: { throttled: boolean; type: string; summary: string } | null
     processes: ProcessInfo[]
   }
 
@@ -145,9 +145,13 @@
         </Card>
       {/if}
 
-      <!-- Throttling -->
-      {#if extras?.throttling?.throttled}
-        <Alert variant="error" message="Thermal throttling active — {extras.throttling.type}" />
+      <!-- Throttling. summary is empty unless the package is slowing now,
+           or it has spent a real share of this boot throttled. -->
+      {#if extras?.throttling?.summary}
+        <Alert
+          variant={extras.throttling.throttled ? 'error' : 'warn'}
+          message={extras.throttling.summary}
+        />
       {/if}
 
       <!-- Top processes -->

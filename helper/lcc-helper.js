@@ -33,53 +33,124 @@ function findBacklight() {
 }
 
 // ── Battery guard ────────────────────────────────────────────────────────────
-// Root-owned, udev-triggered CPU cap: engages at ≤20% battery, releases at
-// ≥22% (hysteresis so a battery hovering at the boundary doesn't flap). Runs
-// independent of the app — no pkexec prompt per transition; auth happens once
-// at install/uninstall.
+// Root-owned CPU cap: engages at ≤20% battery, releases at ≥22% (hysteresis
+// so a battery hovering at the boundary doesn't flap). Udev runs the script
+// directly. Starting a systemd oneshot on every power_supply event hits
+// StartLimitBurst and the unit then fails, so the boot unit is only for the
+// once-at-boot pass. Release writes back the limits the guard itself saved —
+// it does not force turbo or cpuinfo_max, which would undo a thermal cap.
 const BATTERY_GUARD_SCRIPT = `#!/bin/sh
 # lcc-battery-guard — cap CPU frequency/boost while battery charge is at or
-# below 20%, restore at 22%+. Triggered by udev on battery change events and
-# once at boot. Idempotent: safe to run repeatedly.
+# below 20%. At 22%+, restore only the limits this guard changed.
+# Udev runs this on battery events; a oneshot runs it once at boot.
+# LCC_BATTERY_GUARD_FORCE_RELEASE=1 restores and exits (used on uninstall).
 LOW=20
 HIGH=22
+STATE=/var/lib/lcc/battery-guard.state
+LOCK=/run/lock/lcc-battery-guard.lock
+
+mkdir -p /var/lib/lcc /run/lock 2>/dev/null
+exec 9>"$LOCK"
+
+read_knob() {
+    [ -r "$1" ] || return 1
+    v=$(cat "$1" 2>/dev/null) || return 1
+    case "$v" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$v"
+}
+
+write_knob() {
+    [ -w "$1" ] || return 0
+    cur=$(read_knob "$1") || cur=
+    [ "$cur" = "$2" ] && return 0
+    echo "$2" > "$1" 2>/dev/null
+}
+
+valid_policy() {
+    case "$1" in
+        policy[0-9]|policy[0-9][0-9]|policy[0-9][0-9][0-9]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+save_limits() {
+    {
+        echo "STATE=capped"
+        v=$(read_knob /sys/devices/system/cpu/intel_pstate/no_turbo) && echo "NO_TURBO=$v"
+        v=$(read_knob /sys/devices/system/cpu/cpufreq/boost) && echo "BOOST=$v"
+        for p in /sys/devices/system/cpu/cpufreq/policy*; do
+            [ -d "$p" ] || continue
+            name=$(basename "$p")
+            valid_policy "$name" || continue
+            v=$(read_knob "$p/scaling_max_freq") || continue
+            echo "MAX_$name=$v"
+        done
+    } > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+}
+
+apply_cap() {
+    write_knob /sys/devices/system/cpu/intel_pstate/no_turbo 1
+    write_knob /sys/devices/system/cpu/cpufreq/boost 0
+    for p in /sys/devices/system/cpu/cpufreq/policy*; do
+        [ -d "$p" ] || continue
+        max=$(read_knob "$p/cpuinfo_max_freq") || continue
+        min=$(read_knob "$p/cpuinfo_min_freq") || continue
+        new=$(( max * 60 / 100 ))
+        [ "$new" -lt "$min" ] && new=$min
+        write_knob "$p/scaling_max_freq" "$new"
+    done
+}
+
+restore_limits() {
+    [ -f "$STATE" ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            NO_TURBO=[01])
+                write_knob /sys/devices/system/cpu/intel_pstate/no_turbo "\${line#NO_TURBO=}"
+                ;;
+            BOOST=[01])
+                write_knob /sys/devices/system/cpu/cpufreq/boost "\${line#BOOST=}"
+                ;;
+            MAX_policy[0-9]=*|MAX_policy[0-9][0-9]=*|MAX_policy[0-9][0-9][0-9]=*)
+                rest=\${line#MAX_}
+                name=\${rest%%=*}
+                val=\${rest#*=}
+                valid_policy "$name" || continue
+                case "$val" in ''|*[!0-9]*) continue ;; esac
+                write_knob "/sys/devices/system/cpu/cpufreq/$name/scaling_max_freq" "$val"
+                ;;
+        esac
+    done < "$STATE"
+    rm -f "$STATE"
+}
+
+if [ "$LCC_BATTERY_GUARD_FORCE_RELEASE" = 1 ]; then
+    flock 9 || exit 1
+    restore_limits
+    exit 0
+fi
+
+flock -n 9 || exit 0
 
 bat=$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -n 1)
 case "$bat" in ''|*[!0-9]*) exit 0 ;; esac
 
-cap() {
-    [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo
-    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 0 > /sys/devices/system/cpu/cpufreq/boost
-    for p in /sys/devices/system/cpu/cpufreq/policy*; do
-        [ -d "$p" ] || continue
-        max=$(cat "$p/cpuinfo_max_freq" 2>/dev/null)
-        min=$(cat "$p/cpuinfo_min_freq" 2>/dev/null)
-        case "$max$min" in *[!0-9]*|'') continue ;; esac
-        new=$(( max * 60 / 100 ))
-        [ "$new" -lt "$min" ] && new=$min
-        echo "$new" > "$p/scaling_max_freq" 2>/dev/null
-    done
-}
-
-uncap() {
-    [ -w /sys/devices/system/cpu/intel_pstate/no_turbo ] && echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo
-    [ -w /sys/devices/system/cpu/cpufreq/boost ] && echo 1 > /sys/devices/system/cpu/cpufreq/boost
-    for p in /sys/devices/system/cpu/cpufreq/policy*; do
-        [ -d "$p" ] || continue
-        cat "$p/cpuinfo_max_freq" > "$p/scaling_max_freq" 2>/dev/null
-    done
-}
-
 if [ "$bat" -le "$LOW" ]; then
-    cap
+    # Re-apply after boot: sysfs limits reset, but the saved restore values
+    # must stay as they were when the cap was first taken.
+    [ -f "$STATE" ] || save_limits
+    apply_cap
 elif [ "$bat" -ge "$HIGH" ]; then
-    uncap
+    restore_limits
 fi
 exit 0
 `
 
 const BATTERY_GUARD_SERVICE = `[Unit]
 Description=LCC battery guard — cap CPU when battery is low
+# Udev runs the script itself. This unit is the boot pass only, but a zero
+# start limit means a burst of starts can never park the unit in the failed state.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
@@ -89,8 +160,10 @@ ExecStart=/usr/local/libexec/lcc-battery-guard.sh
 WantedBy=multi-user.target
 `
 
-const BATTERY_GUARD_RULE = `# LCC battery guard — evaluate the CPU cap on every battery state change.
-ACTION!="remove", SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Battery", RUN+="/bin/systemctl start --no-block lcc-battery-guard.service"
+const BATTERY_GUARD_RULE = `# LCC battery guard — evaluate the CPU cap on battery events.
+# Run the script directly. "systemctl start" on every uevent trips the unit
+# start-rate limit, and later transitions are then refused.
+ACTION!="remove", SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Battery", RUN+="/usr/local/libexec/lcc-battery-guard.sh"
 `
 
 const BATTERY_GUARD_FILES = [
@@ -99,13 +172,35 @@ const BATTERY_GUARD_FILES = [
   '/etc/udev/rules.d/99-lcc-battery-guard.rules',
 ]
 
-function uncapCpuNow() {
-  try { syswrite('/sys/devices/system/cpu/intel_pstate/no_turbo', 0) } catch { /* absent */ }
-  try { syswrite('/sys/devices/system/cpu/cpufreq/boost', 1) } catch { /* absent */ }
-  for (const p of readdirSync('/sys/devices/system/cpu/cpufreq').filter(e => e.startsWith('policy'))) {
-    const dir = `/sys/devices/system/cpu/cpufreq/${p}`
-    try { syswrite(`${dir}/scaling_max_freq`, sysread(`${dir}/cpuinfo_max_freq`)) } catch { /* ignore */ }
+// Put back only the limits the guard saved. A missing state file means the
+// guard is not holding a cap — do not force turbo or cpuinfo_max.
+function releaseBatteryGuardCap() {
+  const script = BATTERY_GUARD_FILES[0]
+  const statePath = '/var/lib/lcc/battery-guard.state'
+  if (existsSync(script)) {
+    try {
+      execFileSync(script, {
+        env: { ...process.env, LCC_BATTERY_GUARD_FORCE_RELEASE: '1' },
+        stdio: 'pipe',
+      })
+      return
+    } catch { /* fall through and apply the state file directly */ }
   }
+  if (!existsSync(statePath)) return
+  let lines = []
+  try { lines = readFileSync(statePath, 'utf8').split('\n') } catch { return }
+  for (const line of lines) {
+    if (/^NO_TURBO=[01]$/.test(line)) {
+      try { syswrite('/sys/devices/system/cpu/intel_pstate/no_turbo', line.slice('NO_TURBO='.length)) } catch { /* absent */ }
+    } else if (/^BOOST=[01]$/.test(line)) {
+      try { syswrite('/sys/devices/system/cpu/cpufreq/boost', line.slice('BOOST='.length)) } catch { /* absent */ }
+    } else {
+      const m = /^MAX_(policy\d+)=(\d+)$/.exec(line)
+      if (!m) continue
+      try { syswrite(`/sys/devices/system/cpu/cpufreq/${m[1]}/scaling_max_freq`, m[2]) } catch { /* ignore */ }
+    }
+  }
+  try { unlinkSync(statePath) } catch { /* already gone */ }
 }
 
 function runApt(args, env) {
@@ -298,6 +393,7 @@ const ops = {
     writeFileSync(BATTERY_GUARD_FILES[1], BATTERY_GUARD_SERVICE, { mode: 0o644 })
     writeFileSync(BATTERY_GUARD_FILES[2], BATTERY_GUARD_RULE, { mode: 0o644 })
     execFileSync('systemctl', ['daemon-reload'])
+    try { execFileSync('systemctl', ['reset-failed', 'lcc-battery-guard.service']) } catch { /* not failed */ }
     execFileSync('systemctl', ['enable', 'lcc-battery-guard.service'])
     execFileSync('udevadm', ['control', '--reload-rules'])
     try { execFileSync('systemctl', ['start', 'lcc-battery-guard.service']) } catch { /* evaluate later via udev */ }
@@ -307,13 +403,13 @@ const ops = {
   'battery-guard-uninstall'() {
     try { execFileSync('systemctl', ['stop', 'lcc-battery-guard.service']) } catch { /* not running */ }
     try { execFileSync('systemctl', ['disable', 'lcc-battery-guard.service']) } catch { /* not enabled */ }
-    uncapCpuNow()
+    releaseBatteryGuardCap()
     for (const f of BATTERY_GUARD_FILES) {
       try { unlinkSync(f) } catch { /* already gone */ }
     }
     try { execFileSync('systemctl', ['daemon-reload']) } catch { /* ignore */ }
     try { execFileSync('udevadm', ['control', '--reload-rules']) } catch { /* ignore */ }
-    console.log('Battery guard removed, CPU limits restored')
+    console.log('Battery guard removed')
   },
 
   'grub-set'(...pairs) {

@@ -232,12 +232,12 @@
           <div class="flex-1 min-w-0 space-y-0.5">
             <p id="battery-guard-label" class="text-[13px] font-medium">Battery guard</p>
             <p class="text-xs text-muted-foreground">
-              Cap CPU speed when the battery drops to 20% or below, restore it above 22%.
-              Runs even when the app is closed.
+              Cap CPU speed when the battery drops to 20% or below. Above 22% it puts back
+              the limits it changed. Runs even when the app is closed.
             </p>
             {#if status.batteryGuard.installed}
               <p class="text-[11px] font-medium {status.batteryGuard.capped ? 'text-status-warn' : 'text-status-ok'}">
-                {status.batteryGuard.capped ? 'CPU capped — battery is low' : 'Armed — CPU at full speed'}
+                {status.batteryGuard.capped ? 'CPU capped — battery is low' : 'Armed — applies at 20%'}
               </p>
             {/if}
           </div>

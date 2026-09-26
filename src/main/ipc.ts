@@ -89,35 +89,9 @@ export async function registerIpcHandlers(): Promise<void> {
   })
 
   // ── Thermal ────────────────────────────────────────────────────────────────
-  async function getThermalThrottling(): Promise<{ throttled: boolean; type: string } | null> {
+  async function getThermalThrottling(): Promise<ThrottleReading | null> {
     try {
-      // Check for thermal throttling via thermal zones
-      const zones = await readdir('/sys/class/thermal').catch(() => [])
-      for (const zone of zones) {
-        const type = await sysread(`/sys/class/thermal/${zone}/type`).catch(() => '')
-        if (type.toLowerCase().includes('x86_pkg_temp') || type.toLowerCase().includes('cpu')) {
-          const trip = await sysread(`/sys/class/thermal/${zone}/trip_point_0_type`).catch(() => '')
-          const temp = parseInt(await sysread(`/sys/class/thermal/${zone}/temp`) || '0') / 1000
-          const tripTemp = parseInt(await sysread(`/sys/class/thermal/${zone}/trip_point_0_temp`) || '0') / 1000
-          if (trip.toLowerCase().includes('critical') && temp >= tripTemp * 0.95) {
-            return { throttled: true, type: 'Temperature critical' }
-          }
-        }
-      }
-
-      // Check via dmesg for throttling messages
-      const dmesg = await run('dmesg 2>/dev/null | tail -100').catch(() => '')
-      if (dmesg.toLowerCase().includes('throttling') && dmesg.toLowerCase().includes('cpu')) {
-        return { throttled: true, type: 'CPU throttling detected' }
-      }
-
-      // Check MSR for thermal throttling (if rdmsr available)
-      const msr = await run('rdmsr -f 0:0 0x1a0 2>/dev/null || echo 0').catch(() => '0')
-      if (msr.trim() === '1') {
-        return { throttled: true, type: 'Thermal throttling active' }
-      }
-
-      return { throttled: false, type: 'Normal' }
+      return observeThermalThrottle()
     } catch {
       return null
     }
@@ -3933,6 +3907,16 @@ export async function registerIpcHandlers(): Promise<void> {
       detail: hasPlatformProfile ? 'platform_profile supported' : 'Not supported — power-profiles-daemon may still work'
     })
 
+    const throttle = observeThermalThrottle()
+    if (throttle.supported) {
+      checks.push({
+        id: 'thermal-throttle',
+        label: 'CPU thermal throttling',
+        state: throttle.summary ? 'warn' : 'ok',
+        detail: throttle.summary || 'No significant package throttling since boot',
+      })
+    }
+
     const memSleep = await sysread('/sys/power/mem_sleep').catch(() => '')
     if (memSleep) {
       const hasDeep = memSleep.includes('deep')
@@ -4196,23 +4180,129 @@ async function findBacklight(): Promise<string | null> {
 function batteryGuardStatus(): { installed: boolean; supported: boolean; capped: boolean } {
   const installed = existsSync('/etc/systemd/system/lcc-battery-guard.service')
   const supported = existsSync('/sys/devices/system/cpu/cpufreq') || existsSync('/sys/devices/system/cpu/intel_pstate')
-  let capped = false
-  try {
-    capped = existsSync('/sys/devices/system/cpu/intel_pstate/no_turbo')
-      && readFileSync('/sys/devices/system/cpu/intel_pstate/no_turbo', 'utf8').trim() === '1'
-  } catch { /* absent */ }
-  if (!capped) {
-    try {
-      const p = readdirSync('/sys/devices/system/cpu/cpufreq').find(e => e.startsWith('policy'))
-      if (p) {
-        const dir = `/sys/devices/system/cpu/cpufreq/${p}`
-        const max = parseInt(readFileSync(`${dir}/scaling_max_freq`, 'utf8').trim() || '0')
-        const top = parseInt(readFileSync(`${dir}/cpuinfo_max_freq`, 'utf8').trim() || '0')
-        if (top > 0 && max > 0 && max < top) capped = true
-      }
-    } catch { /* no cpufreq */ }
-  }
+  // The state file exists only while the guard itself is holding a cap.
+  // Inferring from no_turbo / scaling_max treated every thermal cap as "battery is low".
+  const capped = existsSync('/var/lib/lcc/battery-guard.state')
   return { installed, supported, capped }
+}
+
+type ThrottleReading = {
+  supported: boolean
+  throttled: boolean
+  type: string
+  packageEvents: number
+  packageTimeMs: number
+  coreEvents: number
+  summary: string
+}
+
+function readSysfsInt(path: string): number | null {
+  try {
+    const n = parseInt(readFileSync(path, 'utf8').trim(), 10)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+// Package counters are duplicated on every CPU of the package, so they are
+// read from cpu0. Core counters are per-CPU and are summed.
+function readThrottleCounters(): { packageEvents: number; packageTimeMs: number; coreEvents: number; coreTimeMs: number } | null {
+  const cpuDir = '/sys/devices/system/cpu'
+  const packageEvents = readSysfsInt(`${cpuDir}/cpu0/thermal_throttle/package_throttle_count`)
+  const packageTimeMs = readSysfsInt(`${cpuDir}/cpu0/thermal_throttle/package_throttle_total_time_ms`)
+  if (packageEvents == null || packageTimeMs == null) return null
+  let coreEvents = 0
+  let coreTimeMs = 0
+  try {
+    for (const cpu of readdirSync(cpuDir)) {
+      if (!/^cpu\d+$/.test(cpu)) continue
+      const base = `${cpuDir}/${cpu}/thermal_throttle`
+      coreEvents += readSysfsInt(`${base}/core_throttle_count`) ?? 0
+      coreTimeMs += readSysfsInt(`${base}/core_throttle_total_time_ms`) ?? 0
+    }
+  } catch { /* no per-cpu throttle files */ }
+  return { packageEvents, packageTimeMs, coreEvents, coreTimeMs }
+}
+
+let throttleWatch = { packageTimeMs: 0, coreTimeMs: 0, lastGrowthAt: 0, ready: false }
+
+function fmtDurationMs(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 90) return `${s}s`
+  const min = Math.round(s / 60)
+  if (min < 90) return `${min} min`
+  const h = s / 3600
+  return h < 10 ? `${h.toFixed(1)} h` : `${Math.round(h)} h`
+}
+
+function fmtCount(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000
+    return `${m >= 10 ? Math.round(m) : m.toFixed(1)}M`
+  }
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`
+  return n.toLocaleString('en-US')
+}
+
+const THROTTLE_NOTABLE_MS = 60_000
+const THROTTLE_NOTABLE_FRACTION = 0.05
+const THROTTLE_ACTIVE_WINDOW_MS = 8_000
+
+function readUptimeMs(): number {
+  try {
+    const sec = parseFloat(readFileSync('/proc/uptime', 'utf8').split(/\s+/)[0] || '0')
+    return Number.isFinite(sec) ? sec * 1000 : 0
+  } catch {
+    return 0
+  }
+}
+
+// Intel thermal_throttle sysfs is the signal that the CPU actually clocked
+// down. Trip-point proximity and MSR 0x1a0 do not report it: 0x1a0 bit 0 is
+// fast-strings enable, and package throttling on this platform starts well
+// below the ACPI critical trip.
+function observeThermalThrottle(): ThrottleReading {
+  const empty: ThrottleReading = {
+    supported: false,
+    throttled: false,
+    type: 'Normal',
+    packageEvents: 0,
+    packageTimeMs: 0,
+    coreEvents: 0,
+    summary: '',
+  }
+  const stats = readThrottleCounters()
+  if (!stats) return empty
+  const now = Date.now()
+  if (!throttleWatch.ready) {
+    throttleWatch = { packageTimeMs: stats.packageTimeMs, coreTimeMs: stats.coreTimeMs, lastGrowthAt: 0, ready: true }
+  } else if (stats.packageTimeMs > throttleWatch.packageTimeMs || stats.coreTimeMs > throttleWatch.coreTimeMs) {
+    throttleWatch.lastGrowthAt = now
+    throttleWatch.packageTimeMs = stats.packageTimeMs
+    throttleWatch.coreTimeMs = stats.coreTimeMs
+  } else {
+    throttleWatch.packageTimeMs = stats.packageTimeMs
+    throttleWatch.coreTimeMs = stats.coreTimeMs
+  }
+  const throttled = throttleWatch.lastGrowthAt > 0 && now - throttleWatch.lastGrowthAt < THROTTLE_ACTIVE_WINDOW_MS
+  const uptimeMs = readUptimeMs()
+  const notable = stats.packageTimeMs >= THROTTLE_NOTABLE_MS
+    && uptimeMs > 0
+    && stats.packageTimeMs / uptimeMs >= THROTTLE_NOTABLE_FRACTION
+  const since = `Since boot the package has slowed for ${fmtDurationMs(stats.packageTimeMs)} across ${fmtCount(stats.packageEvents)} events.`
+  let summary = ''
+  if (throttled) summary = `Thermal throttling now. ${since}`
+  else if (notable) summary = `The package has been thermally throttled for ${fmtDurationMs(stats.packageTimeMs)} of this boot (${fmtCount(stats.packageEvents)} events). The CPU is clocking down to stay under its thermal limit.`
+  return {
+    supported: true,
+    throttled,
+    type: throttled ? 'Package throttling' : 'Normal',
+    packageEvents: stats.packageEvents,
+    packageTimeMs: stats.packageTimeMs,
+    coreEvents: stats.coreEvents,
+    summary,
+  }
 }
 
 export async function collectThermal(): Promise<ThermalSnapshot> {
