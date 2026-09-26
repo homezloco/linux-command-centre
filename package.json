@@ -119,9 +119,6 @@
       "afterInstall": "helper/after-install.sh",
       "afterRemove": "helper/after-remove.sh"
     },
-    "deb": {
-      "afterInstall": "packaging/scripts/after-install.sh"
-    },
     "mac": {
       "hardenedRuntime": true,
       "gatekeeperAssess": false
