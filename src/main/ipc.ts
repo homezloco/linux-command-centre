@@ -1601,6 +1601,14 @@ export async function registerIpcHandlers(): Promise<void> {
   // Dual-boot: switch the hardware clock to UTC so Linux and Windows agree.
   ipcMain.handle('device:setRtcUtc', async () => privilegedOp('rtc-set-utc'))
 
+  // Queue the local DKMS signing key for MOK enrollment. Returns the helper's
+  // message, which includes the one-time password shown at the MOK Manager
+  // screen — the renderer displays it verbatim.
+  ipcMain.handle('device:enrollMok', async () => privilegedOp('mok-enroll'))
+
+  // Load the MSI EC module and report whether it bound to the EC.
+  ipcMain.handle('device:loadMsiEc', async () => privilegedOp('msi-ec-load'))
+
   // ── Security ───────────────────────────────────────────────────────────────
   async function getFirewallStatus() {
     try {
@@ -3928,6 +3936,45 @@ export async function registerIpcHandlers(): Promise<void> {
       })
     }
 
+    // ── Secure Boot / DKMS signing ─────────────────────────────────────────
+    // Ubuntu's DKMS signs out-of-tree modules (nvidia, msi-ec, camera drivers…)
+    // with a machine-local MOK that must be enrolled in firmware. A signed
+    // module with an unenrolled key is refused at load time with "Key was
+    // rejected by service" — the hardware just stops working, and nothing in
+    // the journal points at signing. Vendor-agnostic, so it lives here rather
+    // than in a hardware profile.
+    const sbState = (await run('mokutil --sb-state 2>/dev/null').catch(() => '')).toLowerCase()
+    if (sbState.includes('enabled')) {
+      const mokDer = '/var/lib/shim-signed/mok/MOK.der'
+      if (existsSync(mokDer)) {
+        const fpOut = await run(
+          `openssl x509 -in ${mokDer} -inform der -noout -fingerprint -sha1 2>/dev/null`
+        ).catch(() => '')
+        const fp = fpOut.split('=')[1]?.trim().toUpperCase() ?? ''
+        const enrolled = (await run('mokutil --list-enrolled 2>/dev/null').catch(() => '')).toUpperCase()
+        const isEnrolled = fp.length > 0 && enrolled.includes(fp)
+        checks.push({
+          id: 'dkms-mok-enrolled',
+          label: 'DKMS signing key enrolled',
+          state: isEnrolled ? 'ok' : 'fail',
+          detail: isEnrolled
+            ? 'Local module-signing key is enrolled — signed DKMS modules load under Secure Boot'
+            : `Local signing key is not enrolled — Secure Boot rejects DKMS modules (nvidia, msi-ec…). Enroll it, reboot, and confirm at the MOK Manager screen.`,
+          action: isEnrolled ? undefined : 'enroll-mok'
+        })
+      } else {
+        const dkmsOut = await run('dkms status 2>/dev/null').catch(() => '')
+        if (dkmsOut.includes('installed')) {
+          checks.push({
+            id: 'dkms-mok-enrolled',
+            label: 'DKMS signing key enrolled',
+            state: 'fail',
+            detail: 'DKMS modules are installed but no local signing key exists — they are unsigned and Secure Boot will reject them. Reinstall the DKMS package to generate a key, then enroll it via mokutil.'
+          })
+        }
+      }
+    }
+
     // ── Dual-boot safety ───────────────────────────────────────────────────
     // Not vendor-specific: any machine sharing a disk with Windows. Both of
     // these can cost the user real data or time, and neither is visible
@@ -4030,7 +4077,9 @@ export async function registerIpcHandlers(): Promise<void> {
       )
     } else if (isMsi) {
       builtIn.push(
-        { type: 'package', ref: 'msi-ec-dkms',                    label: 'MSI EC: fan/battery control module' }
+        { type: 'package', ref: 'msi-ec-dkms',                    label: 'MSI EC: fan/battery control module' },
+        { type: 'kernel',  ref: '6.4',                            label: 'msi-ec merged in mainline kernel' },
+        { type: 'github',  ref: 'BeardOverflow/msi-ec/755',       label: 'EC conf: MS-1799 (GE72/GP72 7RE)' }
       )
     }
 

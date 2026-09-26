@@ -312,8 +312,94 @@ const msi: HardwareProfile = {
       id: 'msi-ec',
       label: 'MSI EC kernel module',
       module: 'msi_ec',
-      okDetail: 'msi_ec loaded — fan/battery control available',
-      failDetail: 'Not loaded — install msi-ec-dkms for fan control'
+      okDetail: 'msi_ec module loaded',
+      failDetail: 'Not loaded — needed for fan mode, shift mode and cooler boost',
+      action: 'msi-ec-load'
+    },
+    {
+      // A loaded msi_ec proves nothing on its own: it only works if the EC
+      // firmware version string (read from EC memory) matches an entry in the
+      // driver's conf table. The mainline table is much smaller than the
+      // BeardOverflow DKMS one, so "module loaded, nothing bound" is the
+      // common failure on older MSI boards like the MS-1799 (GE72/GP72 7RE).
+      kind: 'custom',
+      id: 'msi-ec-bound',
+      async evaluate(ctx) {
+        if (!existsSync('/sys/module/msi_ec')) return null
+        const fw = (await ctx.sysread('/sys/devices/platform/msi-ec/fw_version').catch(() => '')).trim()
+        return {
+          id: 'msi-ec-bound',
+          label: 'EC firmware binding',
+          state: fw ? 'ok' : 'warn',
+          detail: fw
+            ? `Bound to EC ${fw} — fan, shift-mode and battery controls available`
+            : 'Loaded but did not bind — no conf for this EC firmware in the in-kernel table. The BeardOverflow msi-ec-dkms module supports more EC revisions.'
+        }
+      }
+    },
+    {
+      // SteelSeries RGB keyboard (USB 1770:ff00) uses the in-kernel hid_gt683r
+      // driver, which exposes back/front/side LED zones under /sys/class/leds.
+      // Only flag it when the hardware is actually present — plenty of MSI
+      // boards ship single-colour or no backlight.
+      kind: 'custom',
+      id: 'kbd-rgb',
+      async evaluate(ctx) {
+        const dev = (await ctx.run('lsusb -d 1770:ff00 2>/dev/null').catch(() => '')).trim()
+        if (!dev) return null
+        const leds = (await ctx.run('ls -d /sys/class/leds/*1770:FF00* 2>/dev/null').catch(() => '')).trim()
+        return {
+          id: 'kbd-rgb',
+          label: 'Keyboard RGB (gt683r)',
+          state: leds ? 'ok' : 'warn',
+          detail: leds
+            ? 'SteelSeries keyboard detected — LED zones under /sys/class/leds'
+            : 'Keyboard present but no LED zones — hid_gt683r did not bind'
+        }
+      }
+    },
+    {
+      // Optimus dGPU: the nvidia module legitimately stays unloaded under
+      // prime-select "intel", so only escalate when the driver package is
+      // installed but the module still will not load — under Secure Boot that
+      // is almost always an unenrolled DKMS signing key (Key was rejected by
+      // service). The generic MOK check reports the enrollment itself.
+      kind: 'custom',
+      id: 'nvidia-dgpu',
+      async evaluate(ctx) {
+        const gpu = (await ctx.run('lspci -d 10de: 2>/dev/null').catch(() => '')).trim()
+        if (!gpu) return null
+        if (existsSync('/sys/module/nvidia')) {
+          const v = (await ctx.sysread('/sys/module/nvidia/version').catch(() => '')).trim()
+          return {
+            id: 'nvidia-dgpu',
+            label: 'NVIDIA dGPU',
+            state: 'ok',
+            detail: `Driver ${v || 'loaded'} — ${gpu.split(':').pop()?.trim() ?? 'present'}`
+          }
+        }
+        const installed = (await ctx.run(
+          "dpkg-query -W -f='${db:Status-Abbrev}' 'nvidia-driver-*' 2>/dev/null"
+        ).catch(() => '')).includes('ii')
+        const sb = (await ctx.run('mokutil --sb-state 2>/dev/null').catch(() => '')).toLowerCase()
+        if (installed && sb.includes('enabled')) {
+          return {
+            id: 'nvidia-dgpu',
+            label: 'NVIDIA dGPU',
+            state: 'fail',
+            detail: 'Driver installed but module not loading — Secure Boot is likely rejecting the DKMS module. Enroll the signing key to fix.',
+            action: 'enroll-mok'
+          }
+        }
+        return {
+          id: 'nvidia-dgpu',
+          label: 'NVIDIA dGPU',
+          state: installed ? 'warn' : 'info',
+          detail: installed
+            ? 'Module not loaded — expected if prime-select is set to intel'
+            : 'Hardware present but no NVIDIA driver installed'
+        }
+      }
     },
     {
       kind: 'custom',

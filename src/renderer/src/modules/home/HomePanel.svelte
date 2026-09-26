@@ -61,6 +61,7 @@
   let issuesLoading = $state(false)
   let issuesError = $state('')
   let actionRunning = $state<string | null>(null)
+  let actionNotice = $state('')
 
   let sys = $state<SystemStatus | null>(null)
   let thermal = $state<ThermalSnapshot | null>(null)
@@ -163,6 +164,15 @@
         await loadDevice()
       } else if (action === 'rtc-set-utc') {
         await invoke('device:setRtcUtc')
+        await loadDevice()
+      } else if (action === 'msi-ec-load') {
+        await invoke('device:loadMsiEc')
+        await loadDevice()
+      } else if (action === 'enroll-mok') {
+        // The result carries the one-time MOK Manager password — show it,
+        // don't just reload (the check stays 'fail' until the user reboots
+        // and confirms the enrollment anyway).
+        actionNotice = await invoke<string>('device:enrollMok')
         await loadDevice()
       }
     } catch (e) { error = String(e) }
@@ -451,6 +461,20 @@
       </div>
     {:else if checks.length > 0}
       <div class="space-y-2">
+        {#if actionNotice}
+          <Card class="border-yellow-500/30 bg-yellow-500/10">
+            <div class="flex items-start gap-3">
+              <AlertTriangle size={15} class="text-yellow-400 shrink-0 mt-0.5" />
+              <div class="flex-1 min-w-0">
+                <p class="text-xs font-medium text-yellow-300 mb-1">Action required</p>
+                <p class="text-xs text-muted-foreground whitespace-pre-line leading-relaxed">{actionNotice}</p>
+              </div>
+              <Button variant="icon" size="sm" aria-label="Dismiss" onclick={() => actionNotice = ''}>
+                <X size={12} />
+              </Button>
+            </div>
+          </Card>
+        {/if}
         <p class="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground px-0.5">Hardware Status</p>
         <Card padding="none" class="divide-y divide-border/60">
           {#each checks as check (check.id)}

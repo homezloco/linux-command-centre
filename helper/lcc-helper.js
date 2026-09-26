@@ -9,6 +9,7 @@
 
 const { execFileSync, execSync, spawnSync, spawn } = require('child_process')
 const { writeFileSync, readdirSync, existsSync, readFileSync, unlinkSync, mkdtempSync, rmSync, mkdirSync } = require('fs')
+const { randomBytes } = require('crypto')
 
 const [, , operation, ...args] = process.argv
 
@@ -356,6 +357,46 @@ const ops = {
       throw new Error('gc2607 failed to load — it may not be built for this kernel, or is unsigned under Secure Boot')
     }
     console.log(failed.length ? `Loaded, could not load: ${failed.join(', ')}` : 'Camera module stack loaded')
+  },
+
+  // Queue the machine-local DKMS signing key for MOK enrollment so Secure Boot
+  // will accept DKMS-built modules (nvidia, msi-ec, camera drivers…). mokutil
+  // normally prompts for a password on a controlling tty, which a pkexec'd
+  // process doesn't have — so we generate a one-time password, store its hash
+  // via --generate-hash, and feed the hash file to --import. The password goes
+  // back on stdout so the UI can show it: it's only good for confirming this
+  // enrollment at the MOK Manager screen, then it's dead.
+  'mok-enroll'() {
+    const mokDer = '/var/lib/shim-signed/mok/MOK.der'
+    if (!existsSync(mokDer)) {
+      throw new Error(`No local signing key at ${mokDer} — reinstall the DKMS package to generate one`)
+    }
+    const hashFile = '/root/.mokhash'
+    const pw = randomBytes(4).toString('hex') // 8 hex chars — short enough to type at a firmware prompt
+    execFileSync('mokutil', [`--generate-hash=${pw}`, '--hash-file', hashFile], { stdio: 'pipe' })
+    execFileSync('mokutil', ['--import', mokDer, '--hash-file', hashFile], { stdio: 'pipe' })
+    const pending = execFileSync('mokutil', ['--list-new'], { encoding: 'utf8' })
+    if (!pending.trim()) throw new Error('mokutil accepted the import but no enrollment is pending')
+    console.log(`MOK enrollment queued.\nReboot and press a key at the blue MOK Manager screen, then Enroll MOK → Continue → Yes and enter this one-time password: ${pw}`)
+  },
+
+  // Load msi-ec and report whether it actually bound. The module accepts the
+  // load but binds nothing when the EC firmware version isn't in its conf
+  // table — common on older boards where only the BeardOverflow DKMS fork
+  // carries the conf.
+  'msi-ec-load'() {
+    try {
+      execFileSync('modprobe', ['msi-ec'], { stdio: 'pipe' })
+    } catch (e) {
+      const detail = ((e.stderr || e.message || '') + '').trim()
+      throw new Error(`modprobe msi-ec failed${detail ? `: ${detail}` : ''}`)
+    }
+    try {
+      const fw = readFileSync('/sys/devices/platform/msi-ec/fw_version', 'utf8').trim()
+      console.log(`msi-ec loaded and bound to EC ${fw}`)
+    } catch {
+      console.log('msi-ec loaded but did not bind — no conf entry for this EC firmware. The BeardOverflow msi-ec-dkms module supports more EC revisions.')
+    }
   },
 
   // Windows stores the RTC in local time by default, Linux expects UTC. With
