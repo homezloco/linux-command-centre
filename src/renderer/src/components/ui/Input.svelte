@@ -12,14 +12,14 @@
   import type { HTMLInputAttributes } from 'svelte/elements'
 
   let {
-    error,
-    class: className,
+    error = undefined,
+    class: className = undefined,
     type = 'text',
     disabled = false,
     required = false,
-    id,
-    'aria-describedby': ariaDescribedBy,
-    'aria-invalid': ariaInvalid,
+    id = undefined,
+    'aria-describedby': ariaDescribedBy = undefined,
+    'aria-invalid': ariaInvalid = undefined,
     ...rest
   }: InputProps = $props()
 
