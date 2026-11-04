@@ -67,6 +67,7 @@ sudo rpm -i linux-command-centre-*.rpm
 |---|---|
 | **Power** | Power profile switching (`powerprofilesctl` or ACPI sysfs), sleep state |
 | **Security** | Firewall status, disk encryption, secure boot, AppArmor, failed logins, automatic security updates, ClamAV home-directory scan with directory excludes, Lynis hardening audit, residual package purge, unused protocol blocking — scan/audit results persist across restarts |
+| **RootWatch** | Pair + enroll with a RootWatch instance — posture score, open findings, fleet devices, remediation fix plans (local or remote execution) |
 | **Startup** | Autostart `.desktop` entries (user + system) |
 | **Boot Manager** | GRUB timeout, default entry, kernel parameters — runs `update-grub` |
 | **Date & Time** | Timezone picker, NTP toggle |
@@ -82,7 +83,7 @@ sudo rpm -i linux-command-centre-*.rpm
 | Module | What it does |
 |---|---|
 | **Updates** | Kernel version, apt package updates, GitHub issue tracking |
-| **Logs** | `journalctl` log viewer with unit filter and log level filter |
+| **Logs** | `journalctl` viewer — unit/priority/time/grep filters, stats strip, timeline histogram, app Activity journal, diagnostics export |
 | **Services** | Search, start, stop, enable, disable, restart systemd services |
 | **SSH Keys** | Key list with fingerprints, generate new keys, delete, copy public key |
 | **Crontab** | Visual crontab editor — add/remove/toggle jobs, humanised schedule preview |

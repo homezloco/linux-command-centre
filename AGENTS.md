@@ -73,6 +73,22 @@ Privileged operations are gated through a whitelisted helper:
 - ClamAV scan/audit state is in-memory in the main process, but completed results persist to `userData/security-history.json` and are rehydrated on startup — the panel shows them via the `security:*-status` channels.
 - Scan excludes are directory-name fragments (`--exclude-dir`); a trailing `*` means prefix match (`cuttlefish*`). Default-on options include node_modules, .cache, Android SDK/emulator images, tool caches, and dreamos.
 
+## Logging & observability
+
+- `src/main/log.ts` — JSON-lines app log at `userData/logs/lcc.log` (2MB rotation, keeps `.1`) plus `classifyError()` errClass taxonomy (`lock-busy`/`auth-cancelled`/`timeout`/`spawn`/`exit-N`) and the operations journal at `userData/logs/operations.jsonl` (~800 entries). `writeLog` also prints to console in dev.
+- Every privileged op is journaled inside `privilegedOp`/`privilegedOpStreaming`/`privilegedOpWithStdin` (`src/main/privilege.ts`) with duration + errClass — read back via the `ops:history` channel; the Logs panel's **Activity** tab renders it.
+- Renderer errors: `invoke()` reports failures and `installErrorCapture()` (App.svelte) forwards `onerror`/`unhandledrejection` — both land via the rate-limited `app:log` channel.
+- `logs:diagnostics` builds the paste-ready support bundle (versions + ops journal + log tail + journalctl grep) behind the Logs panel "Copy diagnostics" button.
+- apt lock note: `DPkg::Lock::Timeout` does **not** cover `apt-get update`'s lists lock (`/var/lib/apt/lists/lock`) — verified on apt 2.8.3. The helper's `runAptUpdate()` retries through it for 600s; install/dist-upgrade steps rely on the option itself.
+- The installed helper (`/usr/lib/linux-command-centre/lcc-helper.js`) only refreshes on package reinstall — dev runs still execute the installed copy when present (`helperCommand()` prefers it), so helper edits need `sudo cp helper/lcc-helper.js /usr/lib/linux-command-centre/lcc-helper.js` to take effect locally.
+
+## RootWatch integration
+
+- `src/main/rootwatch.ts` — client for a RootWatch instance (`rootwatch.dev`): cli-auth browser pairing (`POST /api/v1/cli-auth/start|claim`) → `rw_…` token sealed via `safeStorage` into `userData/rootwatch.json`; status pulled read-scope (`/score`, `/devices`, `/remediations`).
+- Device enrollment (`/api/v1/enroll/start|claim`) stores a separate write-scope `deviceTokenEnc`; a 5-min reporter POSTs `/api/v1/devices/report` with metrics/updates/lcc ops+scan summary. hostId = `sha256("rootwatch-host:" + /etc/machine-id)` — must match the RW desktop agent so both report to one device row. Commands are acked `unsupported` except `refresh` → immediate re-report.
+- Remediation bridge: `rwRunLocal` maps RW plan argv onto whitelisted helper ops (systemctl→`service-action`, ufw→`firewall-*`, apt→`apt-install`/`apt-purge`/`apt-upgrade-all`) and refuses upfront on unmappable steps; `rwRemediateRemote` needs an admin-scope token.
+- Panel: `src/renderer/src/modules/rootwatch/RootWatchPanel.svelte` (Settings nav).
+
 ## Snap Store notes
 
 - Confinement is `classic` because the app performs system-level writes that have no snapd interface (GRUB, kernel modules, users, apt upgrades, UFW, `/etc/hosts`, `/etc/resolv.conf`, etc.).
