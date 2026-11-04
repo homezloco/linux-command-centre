@@ -516,15 +516,27 @@ function mapPlanStep(argv: string[]): MappedStep | null {
 
   if (bin === 'systemctl') {
     const [verb, unit] = a
-    if (!['start', 'stop', 'restart', 'enable', 'disable'].includes(verb ?? '')) return null
+    if (verb === 'daemon-reload') {
+      return { label: 'systemctl daemon-reload', op: 'service-action', args: ['daemon-reload'] }
+    }
+    if (!['start', 'stop', 'restart', 'reload', 'enable', 'disable', 'mask', 'unmask'].includes(verb ?? '')) return null
     const svc = unit?.endsWith('.service') || unit?.endsWith('.timer') ? unit : `${unit}.service`
     return { label: `systemctl ${verb} ${svc}`, op: 'service-action', args: [verb, svc] }
+  }
+
+  if (bin === 'sshd' && a[0] === '-t') {
+    return { label: 'sshd -t', op: 'sshd-validate', args: [] }
   }
 
   if (bin === 'ufw') {
     const args = a.filter((x) => x !== '--force')
     if (args[0] === 'enable' || args[0] === 'disable') {
       return { label: `ufw ${args[0]}`, op: 'firewall-action', args: [args[0]] }
+    }
+    if (args[0] === 'delete' && ['allow', 'deny', 'reject'].includes(args[1] ?? '')) {
+      const [port, proto = 'any'] = (args[2] ?? '').split('/')
+      if (!/^\d+$/.test(port)) return null
+      return { label: `ufw delete ${args[1]} ${args[2]}`, op: 'firewall-delete-match', args: [args[1], `${port}/${proto === 'any' ? '' : proto}`.replace(/\/$/, '')] }
     }
     if (['allow', 'deny', 'reject'].includes(args[0] ?? '')) {
       const [port, proto = 'any'] = (args[1] ?? '').split('/')
@@ -536,7 +548,7 @@ function mapPlanStep(argv: string[]): MappedStep | null {
 
   if (bin === 'apt-get') {
     const pkgs = a.filter((x) => !x.startsWith('-'))
-    const verb = a.find((x) => ['install', 'purge', 'upgrade'].includes(x))
+    const verb = a.find((x) => ['install', 'purge', 'upgrade', 'autoremove'].includes(x))
     if (verb === 'install' && pkgs.length === 1) {
       return { label: `apt-get install ${pkgs[0]}`, op: 'apt-install', args: [pkgs[0]], streaming: true }
     }
@@ -546,6 +558,9 @@ function mapPlanStep(argv: string[]): MappedStep | null {
     }
     if (verb === 'upgrade') {
       return { label: 'apt-get upgrade', op: 'apt-upgrade-all', args: [], streaming: true }
+    }
+    if (verb === 'autoremove') {
+      return { label: 'apt-get autoremove', op: 'apt-autoremove', args: [], streaming: true }
     }
     return null
   }
@@ -558,6 +573,9 @@ function expandPlan(plan: { label: string; argv: string[] }[]): PlanMapping {
   const missing: string[] = []
   for (const step of plan) {
     const argv = step.argv
+    // `apt-get update` steps are already covered — every apt op in the helper
+    // runs the lists-refresh itself first.
+    if (argv[0] === 'apt-get' && argv[1] === 'update') continue
     // apt-install is single-package — expand multi-package installs into one
     // step per package rather than widening the helper's surface.
     if (argv[0] === 'apt-get' && argv.slice(1).includes('install')) {

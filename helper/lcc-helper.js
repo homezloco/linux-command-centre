@@ -502,8 +502,13 @@ const ops = {
   },
 
   'service-action'(action, service) {
+    if (!['start', 'stop', 'enable', 'disable', 'restart', 'reload', 'mask', 'unmask', 'daemon-reload'].includes(action)) throw new Error('Invalid action')
+    if (action === 'daemon-reload') {
+      execFileSync('systemctl', ['daemon-reload'])
+      console.log('systemctl daemon-reload')
+      return
+    }
     if (!service || !/^[a-zA-Z0-9@._-]+\.(service|timer)$/.test(service)) throw new Error('Invalid service/timer name')
-    if (!['start', 'stop', 'enable', 'disable', 'restart'].includes(action)) throw new Error('Invalid action')
     execFileSync('systemctl', [action, service])
     console.log(`systemctl ${action} ${service}`)
   },
@@ -903,6 +908,31 @@ const ops = {
     if (isNaN(num) || num < 1) throw new Error('Invalid rule number')
     execFileSync('ufw', ['--force', 'delete', String(num)], { stdio: 'inherit' })
     console.log(`UFW rule ${num} deleted`)
+  },
+
+  // Delete a ufw rule by spec rather than number — `ufw delete allow 22/tcp`.
+  // RootWatch remediation rollback steps use this form.
+  'firewall-delete-match'(action, rule) {
+    if (!['allow', 'deny', 'reject'].includes(action)) throw new Error('Invalid action')
+    if (!/^\d{1,5}(\/(tcp|udp))?$/.test(rule || '') || parseInt(rule) > 65535) throw new Error('Invalid rule spec')
+    execFileSync('ufw', ['--force', 'delete', action, rule], { stdio: 'inherit' })
+    console.log(`UFW rule deleted: ${action} ${rule}`)
+  },
+
+  'apt-autoremove'() {
+    const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
+    return runApt(['-o', 'DPkg::Lock::Timeout=600', 'autoremove', '-y'], env)
+      .then(() => console.log('Autoremove completed'))
+  },
+
+  // Config validation step in remediation plans — output is empty on success.
+  'sshd-validate'() {
+    try {
+      execFileSync('sshd', ['-t'], { stdio: 'pipe' })
+      console.log('sshd config OK')
+    } catch (e) {
+      throw new Error(e.stderr?.toString().trim() || 'sshd -t failed')
+    }
   },
 
   'printer-delete'(name) {
