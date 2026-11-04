@@ -10,7 +10,33 @@ export function overlayPortalTarget(): HTMLElement {
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
-  return window.electronAPI.invoke<T>(channel, ...args)
+  return window.electronAPI.invoke<T>(channel, ...args).catch((err) => {
+    // Report every failed invoke into the app's own log so panel-level
+    // "catch → toast → discard" doesn't erase the record. Bypasses this
+    // wrapper (calls electronAPI.invoke directly) so a failure of the
+    // app:log channel itself can't recurse.
+    const msg = err instanceof Error ? err.message : String(err)
+    void window.electronAPI.invoke('app:log', 'warn', 'ipc', `${channel} failed: ${msg}`).catch(() => {})
+    throw err
+  })
+}
+
+let errorCaptureInstalled = false
+
+/** Forward uncaught renderer errors/rejections into the main-process log. */
+export function installErrorCapture(): void {
+  if (errorCaptureInstalled) return
+  errorCaptureInstalled = true
+  const report = (msg: string) => {
+    void window.electronAPI.invoke('app:log', 'error', 'uncaught', msg).catch(() => {})
+  }
+  window.addEventListener('error', (e) => {
+    report(`${e.message} @${e.filename}:${e.lineno}:${e.colno}`)
+  })
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason instanceof Error ? e.reason.stack ?? e.reason.message : String(e.reason)
+    report(`unhandled rejection: ${reason}`)
+  })
 }
 
 export function formatBytes(bytes: number): string {

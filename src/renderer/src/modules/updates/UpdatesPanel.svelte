@@ -45,6 +45,7 @@
   let selectedPackages = $state<Set<string>>(new Set())
   let upgradePhase = $state<'download' | 'unpack' | 'configure' | 'cleanup' | null>(null)
   let currentPackage = $state<string | null>(null)
+  let lockHolder = $state<string | null>(null)
   let lastOutputAt = $state<number | null>(null)
   let upgradeStartedAt = $state<number | null>(null)
 
@@ -104,17 +105,18 @@
   function resetUpgradeState(message: string) {
     error = ''; upgradeOutput = ''; upgrading = true; upgradeProgress = message
     upgradePhase = 'download'; currentPackage = null; lastOutputAt = null
+    lockHolder = null
     upgradeStartedAt = Date.now()
   }
 
-  function finishUpgrade(success: boolean, message: string) {
+  function finishUpgrade(success: boolean, message: string, toastDetail?: string) {
     upgrading = false
     upgradeProgress = message
     if (success) {
       toasts.success(message, 'Updates')
       void refreshBadges()
     } else {
-      toasts.error(message || 'Upgrade failed', 'Updates')
+      toasts.error(toastDetail ?? (message || 'Upgrade failed'), 'Updates')
     }
   }
 
@@ -135,8 +137,9 @@
         )
       }
     } catch (e) {
-      error = formatError(e)
-      finishUpgrade(false, 'Upgrade failed')
+      const msg = formatError(e)
+      error = msg
+      finishUpgrade(false, 'Upgrade failed', msg)
     }
   }
 
@@ -158,8 +161,9 @@
         )
       }
     } catch (e) {
-      error = formatError(e)
-      finishUpgrade(false, 'Upgrade failed')
+      const msg = formatError(e)
+      error = msg
+      finishUpgrade(false, 'Upgrade failed', msg)
     }
   }
 
@@ -216,11 +220,19 @@
       const line = lines[i]
       if (!line) continue
 
+      // "Waiting for cache lock: Could not get lock ... held by process 3211 (packagekitd)"
+      const lockMatch = line.match(/held by process \d+ \(([^)]+)\)/)
+      if (lockMatch) {
+        lockHolder = lockMatch[1]
+        return
+      }
+
       // "Get:1 https://... cursor amd64 1.2.3 [123 MB]"
       const getMatch = line.match(/^Get:\d+\s+\S+\s+(\S+)/)
       if (getMatch) {
         currentPackage = getMatch[1]
         upgradePhase = 'download'
+        lockHolder = null
         return
       }
 
@@ -229,6 +241,7 @@
       if (unpackMatch) {
         currentPackage = unpackMatch[1]
         upgradePhase = 'unpack'
+        lockHolder = null
         return
       }
 
@@ -237,6 +250,7 @@
       if (unpackingMatch) {
         currentPackage = unpackingMatch[1]
         upgradePhase = 'unpack'
+        lockHolder = null
         return
       }
 
@@ -245,6 +259,7 @@
       if (setupMatch) {
         currentPackage = setupMatch[1]
         upgradePhase = 'configure'
+        lockHolder = null
         return
       }
 
@@ -253,9 +268,13 @@
       if (triggerMatch) {
         currentPackage = triggerMatch[1]
         upgradePhase = 'cleanup'
+        lockHolder = null
         return
       }
     }
+    // Nothing in the recent tail matched a wait line or a phase line — apt is
+    // past the lock wait (e.g. reading lists), so clear any stale holder.
+    lockHolder = null
   }
 
   const phaseLabel: Record<NonNullable<typeof upgradePhase>, string> = {
@@ -380,7 +399,11 @@
 
         {#if upgrading}
           <div class="flex flex-wrap items-center gap-2 text-xs">
-            {#if upgradePhase && currentPackage}
+            {#if lockHolder}
+              <span class="px-2 py-0.5 rounded-md bg-secondary text-status-warn">
+                Waiting for {lockHolder} to release the apt lock…
+              </span>
+            {:else if upgradePhase && currentPackage}
               <span class="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground">
                 {phaseLabel[upgradePhase]} <span class="font-mono text-primary">{currentPackage}</span>
               </span>

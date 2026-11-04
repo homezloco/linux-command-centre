@@ -227,6 +227,23 @@ function runApt(args, env) {
   })
 }
 
+// `apt-get update` takes /var/lib/apt/lists/lock — one lock DPkg::Lock::Timeout
+// does NOT cover (apt 2.8 fails instantly, verified). packagekitd and
+// unattended-upgrades hold it while refreshing, so a foreground package op
+// retries through the contention instead of dying on the first attempt.
+async function runAptUpdate(env) {
+  const deadline = Date.now() + 600_000
+  for (;;) {
+    try {
+      return await runApt(['-o', 'DPkg::Lock::Timeout=600', 'update'], env)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!/could not get lock|unable to lock/i.test(msg) || Date.now() >= deadline) throw err
+      await new Promise((r) => setTimeout(r, 5000))
+    }
+  }
+}
+
 // Like runApt but for an arbitrary command, and never rejects on a non-zero
 // exit — lynis in particular returns non-zero for reasons unrelated to
 // whether the audit actually completed, so the caller inspects stdout itself.
@@ -714,12 +731,12 @@ const ops = {
     const packages = packagesStr.split(',').filter(p => p.length > 0 && /^[a-zA-Z0-9._+-]+$/.test(p))
     if (packages.length === 0) throw new Error('Invalid package names')
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
+    await runAptUpdate(env)
     // The user explicitly picked these packages from the "available updates" list, so
     // honor that choice even if apt would otherwise defer them (phased rollout) or the
     // resolver would need to pull in new dependencies (a plain --only-upgrade refuses that).
     await runApt([
-      '-o', 'DPkg::Lock::Timeout=300',
+      '-o', 'DPkg::Lock::Timeout=600',
       '-o', 'APT::Get::Always-Include-Phased-Updates=true',
       'install', '-y', ...packages
     ], env)
@@ -729,12 +746,12 @@ const ops = {
   async 'apt-upgrade-all'() {
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
     const phased = ['-o', 'APT::Get::Always-Include-Phased-Updates=true']
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
+    await runAptUpdate(env)
     // Plain `apt-get upgrade` silently skips packages deferred by phased rollout and
     // anything "kept back" because it would need to install/remove other packages.
     // "Upgrade All" should mean all of what the panel just listed, so use dist-upgrade
     // and opt in to phased updates explicitly.
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', ...phased, 'dist-upgrade', '-y'], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=600', ...phased, 'dist-upgrade', '-y'], env)
 
     // dist-upgrade's system-wide resolver still won't remove an already-installed
     // package to satisfy an upgrade (e.g. a plugin ABI bump) — it leaves it "kept back"
@@ -745,7 +762,7 @@ const ops = {
     const listing = spawnSync('apt', ['list', '--upgradable'], { encoding: 'utf8' }).stdout || ''
     const remaining = [...listing.matchAll(/^(\S+)\/\S+\s+\S+\s+\S+\s+\[upgradable from:/gm)].map((m) => m[1])
     if (remaining.length > 0) {
-      await runApt(['-o', 'DPkg::Lock::Timeout=300', ...phased, 'install', '-y', ...remaining], env)
+      await runApt(['-o', 'DPkg::Lock::Timeout=600', ...phased, 'install', '-y', ...remaining], env)
     }
     console.log('System upgrade completed')
   },
@@ -757,8 +774,8 @@ const ops = {
     const pkg = allowed[name]
     if (!pkg) throw new Error('Unknown tool')
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'update'], env)
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'install', '-y', pkg], env)
+    await runAptUpdate(env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=600', 'install', '-y', pkg], env)
     console.log(`Installed ${pkg}`)
   },
 
@@ -797,7 +814,7 @@ const ops = {
       return
     }
     const env = { ...process.env, DEBIAN_FRONTEND: 'noninteractive' }
-    await runApt(['-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', ...packages], env)
+    await runApt(['-o', 'DPkg::Lock::Timeout=600', 'purge', '-y', ...packages], env)
     console.log(`Purged ${packages.length} residual package(s): ${packages.join(', ')}`)
   },
 

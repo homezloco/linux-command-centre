@@ -2,8 +2,10 @@
   import { onMount, onDestroy } from 'svelte'
   import { invoke } from '$lib/utils'
   import { Page, Card, Skeleton, Button, Listbox, SegmentedControl, EmptyState } from '$ui'
-  import { RefreshCw, Search, X, Play, ScrollText } from 'lucide-svelte'
+  import { RefreshCw, Search, X, Play, ScrollText, ClipboardCopy } from 'lucide-svelte'
   import Alert from '$lib/Alert.svelte'
+  import ActivityView from './ActivityView.svelte'
+  import { toasts } from '$stores/toasts'
 
   let { visible = true }: { visible?: boolean } = $props()
 
@@ -48,6 +50,8 @@
   let loading = $state(true)
   let refreshing = $state(false)
   let error = $state('')
+  let tab = $state<'journal' | 'activity'>('journal')
+  let diagBusy = $state(false)
 
   let filterUnit = $state('')
   let filterPriority = $state(DEFAULT_PRIORITY)
@@ -118,6 +122,82 @@
     return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  async function copyDiagnostics() {
+    diagBusy = true
+    try {
+      const text = await invoke<string>('logs:diagnostics')
+      await invoke('clipboard:write', text)
+      toasts.success('Diagnostics copied to clipboard', 'Logs')
+    } catch (e) {
+      toasts.error(String(e), 'Logs')
+    } finally {
+      diagBusy = false
+    }
+  }
+
+  // Strip the per-occurrence noise (numbers, hex, paths) so identical messages
+  // emitted by different PIDs/objects group into one counted shape.
+  function normalizeMsg(m: string): string {
+    return m.toLowerCase()
+      .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, '')
+      .replace(/0x[0-9a-f]+/g, '')
+      .replace(/\b\d[\d.:]*\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120)
+  }
+
+  const stats = $derived.by(() => {
+    if (!entries.length) return null
+    let err = 0, warn = 0
+    const unitErr = new Map<string, number>()
+    const msgCount = new Map<string, { text: string; count: number }>()
+    for (const e of entries) {
+      if (e.priority <= 3) err++
+      else if (e.priority === 4) warn++
+      if (e.priority <= 4) {
+        const u = e.unit || e.identifier || 'kernel'
+        unitErr.set(u, (unitErr.get(u) ?? 0) + 1)
+      }
+      const key = normalizeMsg(e.message)
+      if (key) {
+        const cur = msgCount.get(key)
+        if (cur) cur.count++
+        else msgCount.set(key, { text: e.message, count: 1 })
+      }
+    }
+    return {
+      err, warn,
+      topUnits: [...unitErr.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3),
+      topMsgs: [...msgCount.values()].filter(m => m.count > 1).sort((a, b) => b.count - a.count).slice(0, 3)
+    }
+  })
+
+  const histogram = $derived.by(() => {
+    if (entries.length < 2) return null
+    const BUCKETS = 40
+    let min = Infinity, max = -Infinity
+    for (const e of entries) {
+      if (e.timestamp < min) min = e.timestamp
+      if (e.timestamp > max) max = e.timestamp
+    }
+    const span = Math.max(max - min, 1)
+    const buckets = Array.from({ length: BUCKETS }, () => ({ count: 0, worst: 7 }))
+    for (const e of entries) {
+      const i = Math.min(BUCKETS - 1, Math.floor(((e.timestamp - min) / span) * BUCKETS))
+      buckets[i].count++
+      if (e.priority < buckets[i].worst) buckets[i].worst = e.priority
+    }
+    return { buckets, maxCount: Math.max(...buckets.map(b => b.count)) }
+  })
+
+  function bucketClass(worst: number): string {
+    if (worst <= 3) return 'bg-status-fail/60'
+    if (worst === 4) return 'bg-status-warn/60'
+    if (worst === 5) return 'bg-primary/50'
+    return 'bg-muted-foreground/25'
+  }
+
   $effect(() => {
     void filterUnit; void filterPriority; void filterSince
     load(true)
@@ -135,6 +215,25 @@
 <Page fill>
   <div class="flex flex-col flex-1 min-h-0 gap-3">
 
+    <!-- View switch + actions -->
+    <div class="flex items-center gap-2 shrink-0">
+      <SegmentedControl
+        value={tab}
+        options={[
+          { value: 'journal', label: 'Journal' },
+          { value: 'activity', label: 'Activity' },
+        ]}
+        ariaLabel="Log view"
+        onChange={(v) => { tab = v as 'journal' | 'activity' }}
+      />
+      <div class="flex-1"></div>
+      <Button variant="secondary" size="sm" onclick={copyDiagnostics} disabled={diagBusy}>
+        <ClipboardCopy size={13} class="mr-1.5" />
+        Copy diagnostics
+      </Button>
+    </div>
+
+    {#if tab === 'journal'}
     <!-- Filter bar — two rows -->
     <div class="shrink-0 space-y-2">
       <div class="flex items-center gap-2">
@@ -218,6 +317,56 @@
       <div class="shrink-0"><Alert message={error} /></div>
     {/if}
 
+    {#if !loading && entries.length > 0 && (stats || histogram)}
+      <!-- Stats strip — counts + timeline, derived from the fetched window -->
+      <div class="shrink-0 rounded-xl border border-border bg-card px-3 py-2 space-y-2">
+        {#if stats}
+          <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+            {#if stats.err > 0}
+              <button
+                type="button"
+                onclick={() => { filterPriority = '3' }}
+                class="px-2 py-0.5 rounded-md bg-status-fail/15 text-status-fail font-medium hover:bg-status-fail/25 transition-colors"
+                title="Show errors and above"
+              >{stats.err} error{stats.err === 1 ? '' : 's'}</button>
+            {/if}
+            {#if stats.warn > 0}
+              <button
+                type="button"
+                onclick={() => { filterPriority = '4' }}
+                class="px-2 py-0.5 rounded-md bg-status-warn/15 text-status-warn font-medium hover:bg-status-warn/25 transition-colors"
+                title="Show warnings and above"
+              >{stats.warn} warning{stats.warn === 1 ? '' : 's'}</button>
+            {/if}
+            {#each stats.topUnits as [unit, count] (unit)}
+              <button
+                type="button"
+                onclick={() => { filterUnit = unit }}
+                class="px-2 py-0.5 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/70 transition-colors"
+                title="Filter to {unit}"
+              >{unit} <span class="text-status-fail font-medium">{count}</span></button>
+            {/each}
+            {#each stats.topMsgs as msg (msg.text)}
+              <span
+                class="px-2 py-0.5 rounded-md bg-secondary/60 text-muted-foreground truncate max-w-[280px]"
+                title="{msg.text} ({msg.count}×)"
+              >{msg.count}× {msg.text.slice(0, 48)}{msg.text.length > 48 ? '…' : ''}</span>
+            {/each}
+          </div>
+        {/if}
+        {#if histogram}
+          <div class="flex items-end gap-px h-6" title="Entry volume over the fetched window">
+            {#each histogram.buckets as b, i (i)}
+              <div
+                class="flex-1 rounded-sm min-h-px {bucketClass(b.worst)}"
+                style="height: {b.count ? Math.max(6, (b.count / histogram.maxCount) * 100) : 2}%"
+              ></div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     {#if loading}
       <Card padding="none" class="flex-1 min-h-0">
         {#each [0, 1, 2, 3, 4, 5, 6, 7] as i (i)}
@@ -266,6 +415,9 @@
         </table>
       </div>
       <p class="shrink-0 text-[11px] text-muted-foreground text-right">{entries.length} entries</p>
+    {/if}
+    {:else}
+      <ActivityView />
     {/if}
 
   </div>

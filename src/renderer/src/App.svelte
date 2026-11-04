@@ -8,7 +8,7 @@
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
            Globe2, FolderOpen, Gauge, Layers, Timer, Home, Pin,
-           ChevronDown, ChevronRight } from 'lucide-svelte'
+           ChevronDown, ChevronRight, Radar } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -50,10 +50,11 @@
   import GrubPanel        from './modules/grub/GrubPanel.svelte'
   import TimersPanel      from './modules/timers/TimersPanel.svelte'
   import HomePanel        from './modules/home/HomePanel.svelte'
+  import RootWatchPanel   from './modules/rootwatch/RootWatchPanel.svelte'
   import CommandPalette   from '$lib/CommandPalette.svelte'
   import Toaster          from '$lib/Toaster.svelte'
   import { SearchField } from '$ui'
-  import { invoke }      from '$lib/utils'
+  import { invoke, installErrorCapture } from '$lib/utils'
   import { toasts }        from '$stores/toasts'
   import { appName, DEFAULT_APP_NAME } from '$stores/appName'
   import { openPalette } from '$stores/palette'
@@ -120,6 +121,7 @@
       items: [
         { id: 'power',         label: 'Power',         icon: Zap,          component: PowerPanel as PanelComponent,         keywords: ['tuned', 'ppd', 'lid', 'idle'] },
         { id: 'security',      label: 'Security',      icon: Shield,       component: SecurityPanel as PanelComponent },
+        { id: 'rootwatch',     label: 'RootWatch',     icon: Radar,        component: RootWatchPanel as PanelComponent,    keywords: ['security', 'fleet', 'monitoring', 'agent'] },
         { id: 'startup',       label: 'Startup',       icon: LayoutGrid,   component: StartupPanel as PanelComponent },
         { id: 'grub',          label: 'Boot Manager',  icon: Layers,       component: GrubPanel as PanelComponent,          keywords: ['boot', 'grub', 'kernel cmdline'] },
         { id: 'datetime',      label: 'Date & Time',   icon: Clock,        component: DateTimePanel as PanelComponent },
@@ -237,6 +239,7 @@
   }
 
   onMount(() => {
+    installErrorCapture()
     syncWco()
     const overlay = (navigator as Navigator & { windowControlsOverlay?: Wco }).windowControlsOverlay
     overlay?.addEventListener('geometrychange', syncWco)

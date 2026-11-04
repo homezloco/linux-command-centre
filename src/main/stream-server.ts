@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import { collectThermal } from './ipc'
 import { sysread } from './shell'
 import { readdir } from 'fs/promises'
+import { writeLog } from './log'
 
 const PORT = 52341
 // The dev renderer runs on the electron-vite dev server (see index.html's
@@ -29,7 +30,7 @@ export function startStreamServer(): void {
   })
 
   wss.on('error', (err) => {
-    console.error('[stream] server error:', err)
+    writeLog('error', 'stream', `server error: ${String(err)}`)
   })
 
   wss.on('connection', (ws) => {
@@ -43,7 +44,7 @@ export function startStreamServer(): void {
     ws.on('close', () => handleClose(ws))
   })
 
-  console.log(`[stream] WebSocket server on ws://127.0.0.1:${PORT}`)
+  writeLog('info', 'stream', `WebSocket server on ws://127.0.0.1:${PORT}`)
 }
 
 type Subscription = { interval: ReturnType<typeof setInterval> }

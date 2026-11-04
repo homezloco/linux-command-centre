@@ -9,6 +9,8 @@ import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
+import { readLogTail, readOps, writeLog, type LogLevel } from './log'
+import { rwDisconnect, rwEnrollClaim, rwEnrollStart, rwPairClaim, rwPairStart, rwRemediation, rwRemediateRemote, rwRunLocal, rwStatus } from './rootwatch'
 import type { TitleBarOverlayOpts } from '../shared/electron-api'
 
 interface UpdateItem {
@@ -1207,8 +1209,8 @@ export async function registerIpcHandlers(): Promise<void> {
         if (!event.sender.isDestroyed()) event.sender.send('updates:progress', output)
       })
     } catch (err) {
-      console.error('updates:upgrade failed:', err)
       const message = err instanceof Error ? err.message : String(err)
+      writeLog('error', 'updates', `updates:upgrade failed: ${message}`)
       throw new Error(`Upgrade failed: ${message}`)
     }
   })
@@ -2721,7 +2723,7 @@ export async function registerIpcHandlers(): Promise<void> {
       try {
         out = await privilegedOp('logs-query', JSON.stringify(args))
       } catch (privErr) {
-        console.error('Logs query failed:', errorMsg, 'Privileged fallback failed:', privErr)
+        writeLog('error', 'logs', `journalctl failed: ${errorMsg}`, { privErr: String(privErr) })
         throw new Error(`Unable to read logs: ${errorMsg}`)
       }
     }
@@ -2749,6 +2751,61 @@ export async function registerIpcHandlers(): Promise<void> {
   ipcMain.handle('logs:units', async () => {
     const out = await run("journalctl --field=_SYSTEMD_UNIT 2>/dev/null | sort -u | head -100").catch(() => '')
     return out.split('\n').map(l => l.trim().replace('.service', '')).filter(Boolean).sort()
+  })
+
+  // Renderer error reporting — fire-and-forget writes into the app's own log
+  // file. Rate-limited and length-capped so a broken renderer (or a
+  // compromised one) can't grow the log without bound.
+  const rendererLogBudget = { count: 0, resetAt: 0 }
+  ipcMain.handle('app:log', (_, level: string, scope: string, msg: string) => {
+    if (level !== 'info' && level !== 'warn' && level !== 'error') return
+    const now = Date.now()
+    if (now >= rendererLogBudget.resetAt) {
+      rendererLogBudget.count = 0
+      rendererLogBudget.resetAt = now + 60_000
+    }
+    if (++rendererLogBudget.count > 120) return
+    writeLog(level as LogLevel, `renderer:${String(scope).slice(0, 40)}`, String(msg).slice(0, 2000))
+  })
+
+  ipcMain.handle('ops:history', (_, limit?: number) => readOps(limit ?? 50))
+
+  // Support bundle for bug reports — the pieces .github/ISSUE_TEMPLATE/
+  // bug_report.yml asks users to gather by hand, assembled into one block
+  // of text they can paste.
+  // ── RootWatch ───────────────────────────────────────────────────────────
+  ipcMain.handle('rootwatch:pair-start', (_, baseUrl: string) => rwPairStart(String(baseUrl ?? '')))
+  ipcMain.handle('rootwatch:pair-claim', () => rwPairClaim())
+  ipcMain.handle('rootwatch:enroll-start', () => rwEnrollStart())
+  ipcMain.handle('rootwatch:enroll-claim', () => rwEnrollClaim())
+  ipcMain.handle('rootwatch:status', () => rwStatus())
+  ipcMain.handle('rootwatch:remediation', (_, id: number) => rwRemediation(Number(id)))
+  ipcMain.handle('rootwatch:remediate', (_, id: number, mode: 'local' | 'remote', confirmRemote?: boolean) =>
+    mode === 'local' ? rwRunLocal(Number(id)) : rwRemediateRemote(Number(id), !!confirmRemote)
+  )
+  ipcMain.handle('rootwatch:disconnect', () => rwDisconnect())
+
+  ipcMain.handle('logs:diagnostics', async () => {
+    const kernel = await run('uname -sr').catch(() => '')
+    const ops = readOps(100).reverse() // chronological
+    const journal = await run(
+      'journalctl --user -b --no-pager -o short-iso SYSLOG_IDENTIFIER=linux-command-centre.desktop 2>/dev/null | tail -200'
+    ).catch(() => '')
+    return [
+      '=== Linux Command Centre — diagnostics ===',
+      `collected: ${new Date().toISOString()}`,
+      `app: ${app.getVersion()} · electron: ${process.versions.electron} · ${process.platform} ${process.arch}`,
+      kernel ? `kernel: ${kernel}` : '',
+      '',
+      '=== operations journal (chronological) ===',
+      ops.length ? ops.map((o) => JSON.stringify(o)).join('\n') : '(empty)',
+      '',
+      '=== app log (last 300 lines) ===',
+      readLogTail(300) || '(empty)',
+      '',
+      '=== journalctl (this boot, last 200 lines) ===',
+      journal || '(unavailable — journald only captures .desktop launches, not terminal runs)'
+    ].filter((l) => l !== undefined).join('\n')
   })
 
   // ── USB ────────────────────────────────────────────────────────────────────

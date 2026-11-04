@@ -4,6 +4,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import './env'
 import { registerIpcHandlers } from './ipc'
 import { startStreamServer } from './stream-server'
+import { writeLog } from './log'
+import { initRootWatch } from './rootwatch'
 
 function iconPath(): string {
   return app.isPackaged
@@ -77,6 +79,11 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('io.lcc.app')
+  writeLog('info', 'app', 'started', {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    platform: `${process.platform} ${process.arch}`
+  })
 
   app.on('browser-window-created', (_, win) => {
     optimizer.watchWindowShortcuts(win)
@@ -84,6 +91,7 @@ app.whenReady().then(async () => {
 
   await registerIpcHandlers()
   startStreamServer()
+  void initRootWatch()
 
   createWindow()
 
