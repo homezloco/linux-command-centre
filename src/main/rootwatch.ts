@@ -335,6 +335,37 @@ let lastReportError: string | null = null
 type RwCommand = { id?: number; type: string; payload?: unknown }
 type CommandResult = { commandId?: number; status: 'done' | 'failed' | 'unsupported'; result?: unknown }
 
+// Offline queue — failed report bodies persist to disk and replay oldest-first
+// after the next successful report (24h TTL, same rule as the RW agent).
+const queueFile = () => join(app.getPath('userData'), 'rw-report-queue.json')
+const QUEUE_TTL_MS = 24 * 60 * 60 * 1000
+const QUEUE_MAX = 50
+
+async function queueReport(body: unknown): Promise<void> {
+  try {
+    const q = JSON.parse(await readFile(queueFile(), 'utf8').catch(() => '[]')) as { ts: number; body: unknown }[]
+    q.push({ ts: Date.now(), body })
+    await writeFile(queueFile(), JSON.stringify(q.slice(-QUEUE_MAX)))
+  } catch { /* best-effort */ }
+}
+
+async function flushQueue(config: RwConfig, token: string): Promise<void> {
+  const raw = await readFile(queueFile(), 'utf8').catch(() => '')
+  if (!raw) return
+  let q: { ts: number; body: unknown }[] = []
+  try { q = JSON.parse(raw) } catch { return }
+  const fresh = q.filter((e) => Date.now() - e.ts < QUEUE_TTL_MS)
+  let idx = 0
+  for (; idx < fresh.length; idx++) {
+    try {
+      await rwFetch(config.baseUrl, '/api/v1/devices/report', { method: 'POST', body: fresh[idx].body, token })
+    } catch {
+      break // preserve order: stop at the first failure, retry next report
+    }
+  }
+  await writeFile(queueFile(), JSON.stringify(fresh.slice(idx))).catch(() => {})
+}
+
 async function cpuPercent(): Promise<number | null> {
   const read = async () => {
     const line = (await readFile('/proc/stat', 'utf8')).split('\n')[0]
@@ -405,10 +436,33 @@ async function postReport(
     report: await buildReport(),
     ...(commandResults?.length ? { commandResults } : {})
   }
-  const json = (await rwFetch(config.baseUrl, '/api/v1/devices/report', {
-    method: 'POST', body, token
-  })) as { data?: { commands?: RwCommand[] } }
-  return json?.data?.commands ?? []
+  try {
+    const json = (await rwFetch(config.baseUrl, '/api/v1/devices/report', {
+      method: 'POST', body, token
+    })) as { data?: { commands?: RwCommand[] } }
+    return json?.data?.commands ?? []
+  } catch (e) {
+    await queueReport(body)
+    throw e
+  }
+}
+
+// Fleet command execution (R4-lite): a small whitelist of command types this
+// agent can genuinely run — everything else is acknowledged 'unsupported'
+// rather than faked.
+async function executeCommand(c: RwCommand): Promise<CommandResult> {
+  try {
+    if (c.type === 'refresh') return { commandId: c.id, status: 'done' }
+    if (c.type === 'stop-listener') {
+      const pid = Number((c.payload as { pid?: unknown })?.pid)
+      if (!Number.isInteger(pid) || pid <= 1) return { commandId: c.id, status: 'failed', result: 'invalid pid' }
+      await privilegedOp('kill-process', String(pid), 'TERM')
+      return { commandId: c.id, status: 'done' }
+    }
+    return { commandId: c.id, status: 'unsupported' }
+  } catch (e) {
+    return { commandId: c.id, status: 'failed', result: e instanceof Error ? e.message : String(e) }
+  }
 }
 
 async function reportOnce(): Promise<void> {
@@ -422,19 +476,14 @@ async function reportOnce(): Promise<void> {
     const commands = await postReport(config, token)
     lastReportAt = new Date().toISOString()
     lastReportError = null
+    await flushQueue(config, token)
 
     if (commands.length > 0) {
-      // Commands are claimed by the POST that delivered them — acknowledge
-      // every one honestly: 'refresh' = one immediate re-report, nothing else
-      // is executable by this lightweight agent.
+      // Commands are claimed by the POST that delivered them — run what's
+      // executable, ack the rest 'unsupported', then post results back.
       const refresh = commands.some((c) => c.type === 'refresh')
-      const results: CommandResult[] = commands.map((c) => ({
-        commandId: c.id,
-        status: c.type === 'refresh' ? 'done' : 'unsupported'
-      }))
-      if (refresh) {
-        await postReport(config, token).catch(() => [])
-      }
+      const results = await Promise.all(commands.map(executeCommand))
+      if (refresh) await postReport(config, token).catch(() => [])
       await postReport(config, token, results).catch(() => [])
       lastReportAt = new Date().toISOString()
     }

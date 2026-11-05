@@ -3,6 +3,7 @@ import { betaZodTool } from '@anthropic-ai/sdk/helpers/beta/zod'
 import { z } from 'zod'
 import { readFile, readdir } from 'fs/promises'
 import { run } from './shell'
+import { readLogTail, readOps } from './log'
 
 let client: Anthropic | null = null
 
@@ -132,6 +133,59 @@ function buildTools(onToolUse: (name: string) => void) {
         onToolUse('get_disk_status')
         const out = await run('df -h -x tmpfs -x devtmpfs -x squashfs -x overlay').catch(() => '')
         return out || 'no data'
+      }
+    }),
+    betaZodTool({
+      name: 'get_log_stats',
+      description:
+        'Aggregated journal statistics over recent entries: counts by severity and the noisiest units by error/warning count. Prefer this over raw log dumps when assessing overall log health.',
+      inputSchema: z.object({}),
+      run: async () => {
+        onToolUse('get_log_stats')
+        const out = await run('journalctl --since "2 hours ago" --no-pager -o json 2>/dev/null | tail -4000').catch(() => '')
+        const byPriority: Record<number, number> = {}
+        const unitErr = new Map<string, number>()
+        for (const line of out.split('\n')) {
+          if (!line.startsWith('{')) continue
+          try {
+            const j = JSON.parse(line) as { PRIORITY?: string; _SYSTEMD_UNIT?: string; SYSLOG_IDENTIFIER?: string }
+            const p = parseInt(j.PRIORITY ?? '6')
+            byPriority[p] = (byPriority[p] ?? 0) + 1
+            if (p <= 4) {
+              const u = (j._SYSTEMD_UNIT || j.SYSLOG_IDENTIFIER || 'kernel').replace(/\.service$/, '')
+              unitErr.set(u, (unitErr.get(u) ?? 0) + 1)
+            }
+          } catch { /* skip */ }
+        }
+        const topUnits = [...unitErr.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+        return JSON.stringify({ entriesAnalyzed: out.split('\n').filter((l) => l.startsWith('{')).length, byPriority, topUnitsByErrors: topUnits })
+      }
+    }),
+    betaZodTool({
+      name: 'get_operation_history',
+      description:
+        "Recent privileged operations performed BY this app (upgrades, service changes, firewall edits, etc.) with duration and error class — answers 'what did LCC do on this machine'.",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(50).default(10).describe('Number of operations to return')
+      }),
+      run: async (input) => {
+        onToolUse('get_operation_history')
+        const ops = readOps(input.limit)
+        return ops.length ? JSON.stringify(ops) : 'no operations recorded yet'
+      }
+    }),
+    betaZodTool({
+      name: 'get_app_recent_errors',
+      description: "Warnings and errors from Linux Command Centre's own log file — failures the app itself hit (IPC errors, privileged op failures, renderer crashes).",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(50).default(20).describe('Max entries to return')
+      }),
+      run: async (input) => {
+        onToolUse('get_app_recent_errors')
+        const lines = readLogTail(500).split('\n').filter((l) => {
+          try { const j = JSON.parse(l); return j.level === 'error' || j.level === 'warn' } catch { return false }
+        })
+        return lines.length ? lines.slice(-input.limit).join('\n') : 'no warnings or errors in the app log'
       }
     }),
     betaZodTool({
