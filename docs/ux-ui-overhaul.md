@@ -1,11 +1,8 @@
 # UX/UI Overhaul
 
-This document tracks the strategic direction for the Linux Command Centre UX and UI.
+Initial draft for Linux Command Centre interface standards.
 
-## Goals
-- Simplify system management tasks through an intuitive dashboard.
-- Ensure consistency across all modules.
-- Prioritize accessibility and performance.
-
-## Status
-- Currently in planning phase.
+## Principles
+1. Clarity
+2. Accessibility
+3. Performance
