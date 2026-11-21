@@ -1,14 +1,11 @@
-# UX/UI Overhaul Plan
+# UX/UI Overhaul
 
-This document outlines the planned design overhaul for the Linux Command Centre.
+This document tracks the strategic direction for the Linux Command Centre UX and UI.
 
-## Objectives
-- Modernise the UI component library.
-- Ensure consistent spacing and typography.
-- Improve accessibility scores.
-- Create a reusable theme object for Svelte 5 components.
+## Goals
+- Simplify system management tasks through an intuitive dashboard.
+- Ensure consistency across all modules.
+- Prioritize accessibility and performance.
 
-## Phases
-1. **Foundation**: Define CSS variables and design tokens.
-2. **Migration**: Move existing components to the new design system.
-3. **Refinement**: Audit accessibility and performance.
+## Status
+- Currently in planning phase.
