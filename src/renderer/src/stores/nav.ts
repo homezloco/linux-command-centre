@@ -23,6 +23,9 @@ export const active = writable(DEFAULT_LAST)
 export const collapsed = writable<string[]>([...DEFAULTS.collapsed])
 export const pins = writable<string[]>([])
 export const recents = writable<string[]>([])
+export const isSidebarCollapsed = writable<boolean>(
+  typeof localStorage !== 'undefined' && localStorage.getItem('lcc-sidebar-collapsed') === 'true',
+)
 
 let known = new Set<string>()
 let listening = false
@@ -132,6 +135,18 @@ export function setActive(id: string): void {
 export function toggleCollapsed(label: string): void {
   collapsed.update((c) => (c.includes(label) ? c.filter((x) => x !== label) : [...c, label]))
   persist()
+}
+
+export function toggleSidebarCollapsed(): void {
+  isSidebarCollapsed.update((v) => {
+    const next = !v
+    try {
+      localStorage.setItem('lcc-sidebar-collapsed', String(next))
+    } catch {
+      /* non-critical */
+    }
+    return next
+  })
 }
 
 /** @returns false when the pin cap is already full */
