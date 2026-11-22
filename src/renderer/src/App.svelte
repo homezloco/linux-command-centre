@@ -8,7 +8,7 @@
            Printer, ShieldCheck, Bell, Globe, AppWindow,
            Languages, Accessibility, FileText, Camera, KeyRound, CalendarClock,
            Globe2, FolderOpen, Gauge, Layers, Timer, Home, Pin,
-           ChevronDown, ChevronRight, Radar } from 'lucide-svelte'
+           ChevronDown, ChevronRight, Radar, PanelLeftClose, PanelLeftOpen } from 'lucide-svelte'
   import BatteryPanel    from './modules/battery/BatteryPanel.svelte'
   import ThermalPanel    from './modules/thermal/ThermalPanel.svelte'
   import WifiPanel       from './modules/wifi/WifiPanel.svelte'
@@ -60,8 +60,8 @@
   import { openPalette } from '$stores/palette'
   import { badges, startBadgePolling, stopBadgePolling } from '$stores/badges'
   import {
-    active, collapsed, pins, recents,
-    initNav, setActive, toggleCollapsed, togglePin, navCache,
+    active, collapsed, pins, recents, isSidebarCollapsed,
+    initNav, setActive, toggleCollapsed, toggleSidebarCollapsed, togglePin, navCache,
   } from '$stores/nav'
 
   type PanelComponent = Component<{ visible?: boolean }>
@@ -265,33 +265,54 @@
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
   <!-- Sidebar -->
-  <aside class="w-52 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
-    <div class="sidebar-brand drag-region flex items-center gap-2.5 pr-4 h-11 border-b border-border shrink-0">
-      <Shield size={13} class="text-primary/70 no-drag shrink-0" />
-      <span
-        title={$appName.trim() || DEFAULT_APP_NAME}
-        class="min-w-0 truncate text-[11px] font-semibold text-foreground/70 uppercase tracking-widest no-drag leading-none"
+  <aside class="{$isSidebarCollapsed ? 'w-14' : 'w-52'} transition-all duration-200 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
+    <div class="sidebar-brand drag-region flex items-center justify-between px-3 h-11 border-b border-border shrink-0">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <Shield size={13} class="text-primary/70 no-drag shrink-0" />
+        {#if !$isSidebarCollapsed}
+          <span
+            title={$appName.trim() || DEFAULT_APP_NAME}
+            class="min-w-0 truncate text-[11px] font-semibold text-foreground/70 uppercase tracking-widest no-drag leading-none"
+          >
+            {$appName.trim() || DEFAULT_APP_NAME}
+          </span>
+        {/if}
+      </div>
+      <button
+        type="button"
+        onclick={() => toggleSidebarCollapsed()}
+        class="no-drag p-1 text-muted-foreground hover:text-foreground rounded transition-colors shrink-0"
+        aria-label={$isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={$isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
-        {$appName.trim() || DEFAULT_APP_NAME}
-      </span>
+        {#if $isSidebarCollapsed}
+          <PanelLeftOpen size={14} />
+        {:else}
+          <PanelLeftClose size={14} />
+        {/if}
+      </button>
     </div>
 
-    <nav aria-label="Modules" class="flex-1 min-h-0 py-2 overflow-y-auto">
-      <div class="px-1.5 pb-2">
-        <SearchField
-          value={navQuery}
-          onChange={(v) => (navQuery = v)}
-          placeholder="Search"
-          aria-label="Filter modules"
-        />
-      </div>
+    <nav aria-label="Modules" class="flex-1 min-h-0 py-2 overflow-y-auto overflow-x-hidden">
+      {#if !$isSidebarCollapsed}
+        <div class="px-1.5 pb-2">
+          <SearchField
+            value={navQuery}
+            onChange={(v) => (navQuery = v)}
+            placeholder="Search"
+            aria-label="Filter modules"
+          />
+        </div>
+      {/if}
 
       <ul class="space-y-4 px-1.5 select-none">
         {#if pinnedMods.length}
           <li>
-            <p class="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Pinned
-            </p>
+            {#if !$isSidebarCollapsed}
+              <p class="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Pinned
+              </p>
+            {/if}
             <ul class="space-y-px">
               {#each pinnedMods as mod (mod.id)}
                 {@const badge = badgeFor(mod.id)}
@@ -301,14 +322,17 @@
                     href="#{mod.id}"
                     onclick={(e) => onNavClick(e, mod.id)}
                     class={rowClass(isActive)}
+                    title={$isSidebarCollapsed ? mod.label : undefined}
                   >
                     <mod.icon size={14} class="shrink-0" />
-                    <span class="flex-1 text-left truncate">{mod.label}</span>
-                    {#if badge}
-                      <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
-                                   {badgeStyle(mod.id)}">
-                        {badge}
-                      </span>
+                    {#if !$isSidebarCollapsed}
+                      <span class="flex-1 text-left truncate">{mod.label}</span>
+                      {#if badge}
+                        <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
+                                     {badgeStyle(mod.id)}">
+                          {badge}
+                        </span>
+                      {/if}
                     {/if}
                   </a>
                 </li>
@@ -319,9 +343,11 @@
 
         {#if recentMods.length}
           <li>
-            <p class="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Recent
-            </p>
+            {#if !$isSidebarCollapsed}
+              <p class="px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Recent
+              </p>
+            {/if}
             <ul class="space-y-px">
               {#each recentMods as mod (mod.id)}
                 {@const badge = badgeFor(mod.id)}
@@ -331,14 +357,17 @@
                     href="#{mod.id}"
                     onclick={(e) => onNavClick(e, mod.id)}
                     class={rowClass(isActive)}
+                    title={$isSidebarCollapsed ? mod.label : undefined}
                   >
                     <mod.icon size={14} class="shrink-0" />
-                    <span class="flex-1 text-left truncate">{mod.label}</span>
-                    {#if badge}
-                      <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
-                                   {badgeStyle(mod.id)}">
-                        {badge}
-                      </span>
+                    {#if !$isSidebarCollapsed}
+                      <span class="flex-1 text-left truncate">{mod.label}</span>
+                      {#if badge}
+                        <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
+                                     {badgeStyle(mod.id)}">
+                          {badge}
+                        </span>
+                      {/if}
                     {/if}
                   </a>
                 </li>
@@ -352,20 +381,22 @@
           {@const isCollapsed = $collapsed.includes(group.label)}
           {#if !filtering || items.length}
             <li>
-              <button
-                type="button"
-                aria-expanded={filtering || !isCollapsed}
-                onclick={() => toggleCollapsed(group.label)}
-                class="flex w-full items-center gap-1 px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground {hoverBg} rounded-[5px]"
-              >
-                {#if isCollapsed}
-                  <ChevronRight size={12} class="shrink-0" />
-                {:else}
-                  <ChevronDown size={12} class="shrink-0" />
-                {/if}
-                <span class="truncate">{group.label}</span>
-              </button>
-              {#if filtering || !isCollapsed}
+              {#if !$isSidebarCollapsed}
+                <button
+                  type="button"
+                  aria-expanded={filtering || !isCollapsed}
+                  onclick={() => toggleCollapsed(group.label)}
+                  class="flex w-full items-center gap-1 px-2.5 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground {hoverBg} rounded-[5px]"
+                >
+                  {#if isCollapsed}
+                    <ChevronRight size={12} class="shrink-0" />
+                  {:else}
+                    <ChevronDown size={12} class="shrink-0" />
+                  {/if}
+                  <span class="truncate">{group.label}</span>
+                </button>
+              {/if}
+              {#if filtering || !isCollapsed || $isSidebarCollapsed}
                 <ul class="space-y-px">
                   {#each items as mod (mod.id)}
                     {@const badge = badgeFor(mod.id)}
@@ -376,32 +407,37 @@
                         href="#{mod.id}"
                         aria-current={isActive ? 'page' : undefined}
                         onclick={(e) => onNavClick(e, mod.id)}
-                        class="{rowClass(isActive)} pr-7"
+                        class="{rowClass(isActive)} {$isSidebarCollapsed ? '' : 'pr-7'}"
+                        title={$isSidebarCollapsed ? mod.label : undefined}
                       >
                         {#if isActive}
                           <span class="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-primary"></span>
                         {/if}
                         <mod.icon size={14} class="shrink-0" />
-                        <span class="flex-1 text-left truncate">{mod.label}</span>
-                        {#if badge}
-                          <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
-                                       {badgeStyle(mod.id)}">
-                            {badge}
-                          </span>
+                        {#if !$isSidebarCollapsed}
+                          <span class="flex-1 text-left truncate">{mod.label}</span>
+                          {#if badge}
+                            <span class="text-[10px] font-bold px-1.5 py-px rounded-full leading-none shrink-0
+                                         {badgeStyle(mod.id)}">
+                              {badge}
+                            </span>
+                          {/if}
                         {/if}
                       </a>
-                      <button
-                        type="button"
-                        aria-label={pinned ? `Unpin ${mod.label}` : `Pin ${mod.label}`}
-                        aria-pressed={pinned}
-                        onclick={(e) => onPinClick(e, mod.id)}
-                        class="absolute right-1 z-10 rounded p-0.5 text-muted-foreground {hoverBg} hover:text-foreground
-                               {pinned
-                                 ? 'opacity-100 text-primary'
-                                 : 'opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100'}"
-                      >
-                        <Pin size={12} class={pinned ? 'fill-current' : ''} />
-                      </button>
+                      {#if !$isSidebarCollapsed}
+                        <button
+                          type="button"
+                          aria-label={pinned ? `Unpin ${mod.label}` : `Pin ${mod.label}`}
+                          aria-pressed={pinned}
+                          onclick={(e) => onPinClick(e, mod.id)}
+                          class="absolute right-1 z-10 rounded p-0.5 text-muted-foreground {hoverBg} hover:text-foreground
+                                 {pinned
+                                   ? 'opacity-100 text-primary'
+                                   : 'opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100'}"
+                        >
+                          <Pin size={12} class={pinned ? 'fill-current' : ''} />
+                        </button>
+                      {/if}
                     </li>
                   {/each}
                 </ul>
@@ -413,13 +449,15 @@
     </nav>
 
     <div class="px-3 py-2.5 border-t border-border shrink-0 flex items-center gap-2">
-      <div class="w-5 h-5 rounded bg-primary/15 flex items-center justify-center shrink-0">
+      <div class="w-5 h-5 rounded bg-primary/15 flex items-center justify-center shrink-0" title={`${appOs} v${appVersion}`}>
         <Server size={10} class="text-primary/80" />
       </div>
-      <div class="min-w-0">
-        <p class="text-[10px] font-medium text-foreground/60 truncate">{appOs}</p>
-        <p class="text-[11px] text-muted-foreground">v{appVersion}</p>
-      </div>
+      {#if !$isSidebarCollapsed}
+        <div class="min-w-0">
+          <p class="text-[10px] font-medium text-foreground/60 truncate">{appOs}</p>
+          <p class="text-[11px] text-muted-foreground">v{appVersion}</p>
+        </div>
+      {/if}
     </div>
   </aside>
 
