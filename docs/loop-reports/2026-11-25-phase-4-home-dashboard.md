@@ -1,26 +1,29 @@
-# Phase 4: Home View & Dashboard Summary Widgets
+# Loop Report: Phase 4 — Home View & Dashboard Summary Widgets
 
-## What was chosen and why
+## Overview
 
-Picked the top unshipped PLAN.md item after Phase 3 landed (via PR #24):
-the Home View & Dashboard Summary Widgets (`src/renderer/src/panels/Home.svelte`).
-Ranking heuristic 1 (UX consistency per the overhaul doc) put the dashboard
-summary at the top of the remaining staged sequence.
+Selected the top unshipped PLAN.md candidate, Phase 4: Home View &
+Dashboard Summary Widgets (`src/renderer/src/panels/Home.svelte`), per
+loop.md ranking heuristic #1 (the `docs/ux-ui-overhaul.md` PR sequence).
+Phase 3 was already in flight on open PRs #23 and #24, so Phase 4 was the
+next unshipped stage and became the pick.
 
 ## Changes
-- Created `src/renderer/src/panels/HomeDashboard.svelte` — the smallest
-  coherent slice of the Phase 4 dashboard: system health stats, network
-  stats, and three quick-action cards. Uses the Phase 2 primitives
-  (`Page`, `Card`) and Phase 1 status tokens (`--status-ok/-warn/-fail`).
 
-## What could NOT be verified
-- No local run possible (no filesystem, cannot run `npm run check` /
-  `npm run build`). CI on the `lcc/*` branch is the verifier.
-- The new component was not wired into `App.svelte` — that is the next
-  slice of Phase 4.
-- Live data wiring (real CPU/RAM/disk samples) remains for a later slice.
+- Added `src/renderer/src/panels/HomeDashboard.svelte` composing the
+  existing `Page` and `Card` UI primitives.
+- Sections: System Health (CPU / Memory / Disk / Uptime / Services),
+  Network (Downloads / Uploads / Latency), and Quick Actions.
+- Status presentation reuses the design tokens via semantic Tailwind
+  status classes (`text-status-ok`, `text-status-warn`, `text-status-fail`)
+  instead of hardcoded colors.
+
+## What was verified
+
+- Could not run `npm run check` or `npm run build` locally — the engineer
+  cannot run commands; CI on the `lcc/*` branch is the verifier.
 
 ## What remains
-- Wire `HomeDashboard` into `App.svelte`'s home route.
-- Real system metrics via existing IPC channels.
+
+- Wiring the dashboard to real IPC / system data sources.
 - Phase 5: Panel Chrome & Layout Contract Standardization.
