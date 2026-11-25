@@ -15,7 +15,7 @@ interface NetworkStatus {
   latency?: number
 }
 
-interface QuickActions {
+interface QuickAction {
   label: string
   command: string
 }
@@ -23,7 +23,7 @@ interface QuickActions {
 interface Props {
   health?: SystemHealth
   network?: NetworkStatus
-  quickActions?: QuickActions[]
+  quickActions?: QuickAction[]
 }
 
 const DEFAULT_HEALTH: SystemHealth = {
@@ -40,27 +40,21 @@ const DEFAULT_NETWORK: NetworkStatus = {
   latency: 0,
 }
 
-const DEFAULT_ACTIONS: QuickActions[] = [
+const DEFAULT_ACTIONS: QuickAction[] = [
   { label: 'Check Network', command: 'lcc network status' },
   { label: 'Check Storage', command: 'lcc storage status' },
   { label: 'Check Services', command: 'lcc services status' },
 ]
 
-export let health: SystemHealth = DEFAULT_HEALTH
-export let network: NetworkStatus = DEFAULT_NETWORK
-export let quickActions: QuickActions[] = DEFAULT_ACTIONS
+let {
+  health: healthProp,
+  network: networkProp,
+  quickActions: actionsProp,
+}: Props = $props()
 
-export function updateHealth(h: SystemHealth) {
-  health = h
-}
-
-export function updateNetwork(n: NetworkStatus) {
-  network = n
-}
-
-export function updateQuickActions(a: QuickActions[]) {
-  quickActions = a
-}
+let health = $state<SystemHealth>(healthProp ?? DEFAULT_HEALTH)
+let network = $state<NetworkStatus>(networkProp ?? DEFAULT_NETWORK)
+let actions = $state<QuickAction[]>(actionsProp ?? DEFAULT_ACTIONS)
 
 function formatUptime(seconds?: number): string {
   if (!seconds || seconds <= 0) return '—'
@@ -88,7 +82,7 @@ function StatRow({ label, value, status }: { label: string; value?: number; stat
   )
 }
 
-function QuickActionCard({ action }: { action: QuickActions }) {
+function QuickActionCard({ action }: { action: QuickAction }) {
   return (
     <Card padding="sm">
       <div class="flex flex-col gap-2">
@@ -100,38 +94,26 @@ function QuickActionCard({ action }: { action: QuickActions }) {
   )
 }
 
-export default function HomeDashboard({
-  health: healthProp,
-  network: networkProp,
-  quickActions: actionsProp,
-}: {
-  health?: SystemHealth
-  network?: NetworkStatus
-  quickActions?: QuickActions[]
-}) {
-  const health = healthProp ?? DEFAULT_HEALTH
-  const network = networkProp ?? DEFAULT_NETWORK
-  const actions = actionsProp ?? DEFAULT_ACTIONS
-
+export default function HomeDashboard() {
   return (
     <Page description="System overview and quick actions">
       <div class="grid gap-4 md:grid-cols-2">
         <Card>
           <div class="flex flex-col gap-3">
             <h3 class="text-sm font-semibold text-foreground">System Health</h3>
-            <StatRow label="CPU" value={health.cpu} status={statusColor(health.cpu)} />
-            <StatRow label="Memory" value={health.memory} status={statusColor(health.memory)} />
-            <StatRow label="Disk" value={health.disk} status={statusColor(health.disk)} />
-            <StatRow label="Uptime" value={formatUptime(health.uptime)} status={statusColor(health.uptime / 86400)} />
-            <StatRow label="Services" value={health.services} status={statusColor(health.services, 99)} />
+            <StatRow label="CPU" value={health?.cpu} status={statusColor(health?.cpu)} />
+            <StatRow label="Memory" value={health?.memory} status={statusColor(health?.memory)} />
+            <StatRow label="Disk" value={health?.disk} status={statusColor(health?.disk)} />
+            <StatRow label="Uptime" value={formatUptime(health?.uptime)} status={statusColor(health?.uptime ? health.uptime / 86400 : undefined)} />
+            <StatRow label="Services" value={health?.services} status={statusColor(health?.services, 99)} />
           </div>
         </Card>
         <Card>
           <div class="flex flex-col gap-3">
             <h3 class="text-sm font-semibold text-foreground">Network</h3>
-            <StatRow label="Downloads" value={network.downloads} status={statusColor(network.downloads)} />
-            <StatRow label="Uploads" value={network.uploads} status={statusColor(network.uploads)} />
-            <StatRow label="Latency" value={network.latency} status={statusColor(network.latency, 100)} />
+            <StatRow label="Downloads" value={network?.downloads} status={statusColor(network?.downloads)} />
+            <StatRow label="Uploads" value={network?.uploads} status={statusColor(network?.uploads)} />
+            <StatRow label="Latency" value={network?.latency} status={statusColor(network?.latency, 100)} />
           </div>
         </Card>
       </div>
