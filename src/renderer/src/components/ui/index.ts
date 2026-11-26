@@ -17,3 +17,4 @@ export {
 export { default as EmptyState, type EmptyStateProps } from './EmptyState.svelte'
 export { default as Skeleton, type SkeletonProps } from './Skeleton.svelte'
 export { default as Listbox, type ListboxProps, type ListboxOption } from './Listbox.svelte'
+export { default as PanelHeader, type PanelHeaderProps } from './PanelHeader.svelte'
