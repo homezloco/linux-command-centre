@@ -254,18 +254,34 @@
 
     startBadgePolling()
 
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault()
+        document.getElementById('main-content')?.focus()
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown)
+
     return () => {
       overlay?.removeEventListener('geometrychange', syncWco)
+      window.removeEventListener('keydown', handleGlobalKeyDown)
       stopBadgePolling()
     }
   })
 </script>
 
+<a
+  href="#main-content"
+  class="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-3 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-md focus:top-2 focus:left-2 text-xs font-medium"
+>
+  Skip to main content
+</a>
+
 <CommandPalette items={paletteItems} onselect={(id) => setActive(id)} />
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
   <!-- Sidebar -->
-  <aside class="w-52 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
+  <aside aria-label="Sidebar navigation" class="w-52 flex flex-col border-r border-border shrink-0" style="background: hsl(var(--sidebar-bg));">
     <div class="sidebar-brand drag-region flex items-center gap-2.5 pr-4 h-11 border-b border-border shrink-0">
       <Shield size={13} class="text-primary/70 no-drag shrink-0" />
       <span
@@ -424,7 +440,7 @@
   </aside>
 
   <!-- Main panel -->
-  <main class="flex-1 flex flex-col overflow-hidden bg-background">
+  <main id="main-content" tabindex="-1" class="flex-1 flex flex-col overflow-hidden bg-background focus:outline-none">
     <header class="app-header drag-region shrink-0 border-b border-border flex items-center gap-3 pl-5">
       <div class="no-drag flex items-center gap-2.5 flex-1 min-w-0">
         <div class="w-6 h-6 rounded-md bg-card border border-border flex items-center justify-center shrink-0">
