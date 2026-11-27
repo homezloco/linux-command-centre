@@ -10,5 +10,5 @@ The Linux Command Centre improvement plan.
 - [ ] Phase 3: App Shell & Navigation layout in `src/renderer/src/App.svelte` (collapsible sidebar, unified header, command palette integration).
 - [ ] Phase 4: Home View & Dashboard Summary Widgets (`src/renderer/src/panels/Home.svelte`).
 - [ ] Phase 5: Panel Chrome & Layout Contract Standardization across remaining 40 panels.
-- [ ] Phase 6: Chrome Accessibility (a11y) & Full Keyboard Navigation.
+- [x] Phase 6: Chrome Accessibility (a11y) & Full Keyboard Navigation.
 - [ ] Phase 7: Panel Cluster Migration and visual regression validation.
